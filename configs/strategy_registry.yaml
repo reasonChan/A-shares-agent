@@ -1,0 +1,27 @@
+strategies:
+  - strategy_id: breakout_v1
+    version: 1.0.0
+    enabled: true
+    mode: paper
+    allowed_symbols:
+      - 510300.SH
+      - 159915.SZ
+    allowed_sides:
+      - buy
+      - sell
+    max_confidence_cap: 0.8
+    requires_intel_confirmation: false
+
+  - strategy_id: news_momentum_v1
+    version: 1.0.0
+    enabled: false
+    mode: paper
+    allowed_symbols:
+      - "*"
+    allowed_sides:
+      - buy
+      - sell
+    requires_intel_confirmation: true
+    blocked_risk_flags:
+      - unverified
+      - rumor

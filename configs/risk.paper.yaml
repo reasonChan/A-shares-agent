@@ -1,0 +1,59 @@
+environment: paper
+
+global:
+  trading_enabled: false
+  require_human_approval: true
+  kill_switch: false
+  allow_new_entries: true
+  allow_reduce_only: true
+
+limits:
+  max_daily_loss_pct_nav: 0.0
+  max_single_order_pct_nav: 0.0
+  max_position_pct_nav_per_symbol: 0.0
+  max_total_gross_exposure_pct_nav: 0.0
+  max_orders_per_minute: 5
+  max_cancels_per_minute: 5
+  max_open_orders_per_symbol: 2
+  max_duplicate_intents_per_symbol_per_minute: 1
+  max_market_data_delay_ms: 1000
+
+liquidity:
+  min_avg_turnover: 0.0
+  max_participation_rate: 0.0
+  max_spread_bps: 0.0
+
+price:
+  reject_market_orders: true
+  max_limit_price_deviation_bps: 50
+  require_price_band_check: true
+
+symbols:
+  allowed:
+    - "*"
+  lot_size: 100
+
+strategies:
+  allowed:
+    - "*"
+  disabled: []
+
+blacklists:
+  symbols: []
+  strategies: []
+  event_types:
+    - rumor
+    - unverified
+
+human_approval:
+  required_for_importance:
+    - S
+  required_above_order_value: 0.0
+  required_for_low_confidence: true
+  low_confidence_threshold: 0.6
+
+emergency:
+  on_market_data_stale: disable_new_orders
+  on_broker_disconnect: cancel_open_orders
+  on_daily_loss_breach: cancel_all_and_disable
+  on_order_loop_detected: kill_switch

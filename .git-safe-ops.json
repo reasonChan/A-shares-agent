@@ -1,0 +1,29 @@
+{
+  "_comment": "git-safe-ops 配置文件 — 由 git-guard init 自动生成",
+
+  "commitMark": "【AI】",
+  "team": "",
+  "model": "",
+  "agent": "",
+
+  "protectedBranches": ["master", "main", "develop"],
+
+  "branchTypes": ["feat", "fix", "feature", "refactor", "chore", "docs", "test", "hotfix", "style", "perf", "ci"],
+  "commitTypes": ["feat", "fix", "feature", "refactor", "chore", "docs", "test", "revert", "style", "perf", "ci", "spec"],
+  "bannedWords": ["wip", "temp", "fixfix", "test123", "update$", "ok$", "done$"],
+
+  "sensitiveExtensions": ["env", "key", "pem", "p12", "pfx", "secret", "credentials"],
+  "lowRiskKeywords": ["console\\.log", "localhost", "127\\.0\\.0\\.1", "debugger"],
+
+  "largeFileBlockMB": 100,
+  "largeFileWarnMB": 10,
+
+  "pushCommitWarnThreshold": 20,
+  "dirtyFileThreshold": 20,
+  "untrackedFileThreshold": 50,
+  "prFileCountLimit": 50,
+
+  "subjectMaxLength": 120,
+  "branchNoUppercase": true,
+  "branchPattern": ""
+}

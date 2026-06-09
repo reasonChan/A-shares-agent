@@ -1,0 +1,12 @@
+.venv/
+.agents/
+__pycache__/
+*.py[cod]
+*.egg-info/
+data/
+reports/daily/*.json
+reports/daily/*.md
+reports/premarket/*.json
+reports/premarket/*.md
+web/node_modules/
+web/dist/

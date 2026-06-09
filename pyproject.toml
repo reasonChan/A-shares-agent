@@ -1,0 +1,25 @@
+[project]
+name = "agu-agent"
+version = "0.1.0"
+description = "Paper-trading A-share trading agent MVP with intraday, risk, broker, and review services."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111,<1",
+    "pydantic>=2.7,<3",
+    "pytest>=8,<9",
+    "PyYAML>=6.0,<7",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[project.scripts]
+agu-intraday = "scripts.run_intraday_agent:main"
+agu-risk-gateway = "scripts.run_risk_gateway:main"
+agu-paper-broker = "scripts.run_paper_broker:main"
+agu-review = "scripts.run_review_agent:main"
+agu-api = "scripts.run_api:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["trading_agent_system*", "scripts"]

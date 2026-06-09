@@ -1,0 +1,14 @@
+timezone: Asia/Shanghai
+
+trading_session:
+  previous_close_time: "15:00:00"
+  morning_brief_cutoff: "08:45:00"
+  auction_start: "09:15:00"
+  auction_observation_end: "09:20:00"
+  auction_confirm_start: "09:20:00"
+  auction_end: "09:25:00"
+  continuous_open: "09:30:00"
+
+holidays: []
+extra_trading_days: []
+trading_days: []

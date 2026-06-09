@@ -1,0 +1,41 @@
+environment: paper
+
+paths:
+  audit_log: data/audit/app.jsonl
+  event_store: data/events
+  reports: reports/daily
+
+market:
+  max_market_data_delay_ms: 1000
+  indexes:
+    - 000001.SH
+    - 399001.SZ
+    - 399006.SZ
+    - 000300.SH
+
+premarket:
+  news_window: "previous_close_to_auction"
+  limit_per_source: 30
+  providers:
+    - csrc
+    - eastmoney
+    - sina
+    - cailianpress
+  news_feeds: []
+
+watchlist:
+  - 510300.SH
+  - 159915.SZ
+
+paper_broker:
+  initial_cash: 1000000
+  commission_bps: 2
+  slippage_bps: 3
+  fill_model: next_bar
+  allow_partial_fill: false
+
+configs:
+  risk: configs/risk.paper.yaml
+  strategy_registry: configs/strategy_registry.yaml
+  watchlist: configs/symbols.watchlist.yaml
+  premarket: configs/premarket.yaml
