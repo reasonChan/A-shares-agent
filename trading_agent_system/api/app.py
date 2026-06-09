@@ -243,6 +243,77 @@ def risk_approval_queue(limit: int = Query(default=50, ge=1, le=500)) -> dict[st
     return {"queue": queue[:limit]}
 
 
+@app.get("/api/decisions/traces")
+def decision_traces(
+    intent_id: str | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    timeline = []
+    for topic in [
+        "trading.intents",
+        "risk.decisions",
+        "risk.approval_queue",
+        "orders.instructions",
+        "orders.submitted",
+        "orders.filled",
+        "orders.cancelled",
+        "orders.rejected",
+    ]:
+        for envelope in repository.load_envelopes(topic, run_id=run_id, limit=limit):
+            payload_intent_id = _payload_intent_id(envelope.payload)
+            if intent_id and payload_intent_id != intent_id:
+                continue
+            timeline.append(
+                {
+                    "topic": envelope.topic,
+                    "event_id": envelope.event_id,
+                    "producer": envelope.producer,
+                    "run_id": envelope.run_id,
+                    "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+                    "created_at": envelope.created_at.isoformat(),
+                    "intent_id": payload_intent_id,
+                    "evidence_ids": envelope.evidence_ids,
+                    "payload": envelope.payload,
+                }
+            )
+    timeline.sort(key=lambda item: item["created_at"])
+    return {"intent_id": intent_id, "run_id": run_id, "timeline": timeline[:limit]}
+
+
+@app.get("/api/rag/debug")
+def rag_debug(
+    q: str,
+    trading_day: Date | None = None,
+    theme: list[str] | None = Query(default=None),
+    symbol: list[str] | None = Query(default=None),
+    source_rank_min: str | None = None,
+    top_k: int = Query(default=8, ge=1, le=50),
+) -> dict[str, object]:
+    filters = {
+        "q": q,
+        "trading_day": trading_day.isoformat() if trading_day else None,
+        "themes": theme or [],
+        "symbols": symbol or [],
+        "source_rank_min": source_rank_min,
+        "top_k": top_k,
+    }
+    results = RagRetriever(KnowledgeStore(KNOWLEDGE_PATH)).search(
+        query=q,
+        trading_day=trading_day,
+        themes=theme,
+        symbols=symbol,
+        source_rank_min=source_rank_min,
+        top_k=top_k,
+    )
+    return {
+        "query": filters,
+        "result_count": len(results),
+        "results": [result.model_dump(mode="json") for result in results],
+    }
+
+
 @app.get("/api/market/quotes")
 def market_quotes() -> dict[str, object]:
     config = load_yaml_config(APP_CONFIG)
@@ -333,6 +404,17 @@ def _parse_stdout(stdout: str) -> object | None:
         return parsed
     except json.JSONDecodeError:
         return None
+
+
+def _payload_intent_id(payload: dict[str, object]) -> str | None:
+    direct = payload.get("intent_id")
+    if direct:
+        return str(direct)
+    for key in ("intent", "decision", "order_instruction", "fill"):
+        nested = payload.get(key)
+        if isinstance(nested, dict) and nested.get("intent_id"):
+            return str(nested["intent_id"])
+    return None
 
 
 def _fetch_quotes_with_fallback(symbols: list[str]) -> tuple[str, list[object], str | None]:
