@@ -14,17 +14,24 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from trading_agent_system.core.config import load_yaml_config
+from trading_agent_system.core.knowledge import KnowledgeStore, RagRetriever
 from trading_agent_system.core.market_data import (
     EastMoneyMarketDataProvider,
     SinaMarketDataProvider,
     TencentMarketDataProvider,
 )
+from trading_agent_system.core.observability import MetricsRecorder, TraceLogger
+from trading_agent_system.core.storage import JsonlEventRepository
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = ROOT / "reports" / "daily"
 PREMARKET_REPORT_DIR = ROOT / "reports" / "premarket"
 APP_CONFIG = ROOT / "configs" / "app.yaml"
+EVENT_DIR = ROOT / "data" / "events"
+TRACE_DIR = ROOT / "data" / "traces"
+METRICS_DIR = ROOT / "data" / "metrics"
+KNOWLEDGE_PATH = ROOT / "data" / "knowledge.sqlite"
 
 
 class RunRequest(BaseModel):
@@ -155,6 +162,57 @@ def latest_premarket_report() -> dict[str, object]:
         return {"report": json.loads(reports[0].read_text(encoding="utf-8"))}
     except json.JSONDecodeError as error:
         raise HTTPException(status_code=500, detail=f"invalid premarket report: {reports[0].name}") from error
+
+
+@app.get("/api/observability/events")
+def observability_events(topic: str | None = None, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    topics = [topic] if topic else repository.list_topics()
+    events = []
+    for item in topics:
+        events.extend(envelope.model_dump(mode="json") for envelope in repository.load_envelopes(item, limit=limit))
+    events.sort(key=lambda event: event["created_at"], reverse=True)
+    return {"topics": topics, "events": events[:limit]}
+
+
+@app.get("/api/observability/traces")
+def observability_traces(
+    run_id: str | None = None,
+    agent: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    traces = TraceLogger(TRACE_DIR).load(run_id=run_id, agent=agent, limit=limit)
+    return {"traces": [trace.model_dump(mode="json") for trace in traces]}
+
+
+@app.get("/api/observability/metrics")
+def observability_metrics(
+    name: str | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    metrics = MetricsRecorder(METRICS_DIR).load(name=name, run_id=run_id, limit=limit)
+    return {"metrics": [metric.model_dump(mode="json") for metric in metrics]}
+
+
+@app.get("/api/observability/knowledge/search")
+def observability_knowledge_search(
+    q: str,
+    trading_day: Date | None = None,
+    theme: list[str] | None = Query(default=None),
+    symbol: list[str] | None = Query(default=None),
+    source_rank_min: str | None = None,
+    top_k: int = Query(default=8, ge=1, le=50),
+) -> dict[str, object]:
+    results = RagRetriever(KnowledgeStore(KNOWLEDGE_PATH)).search(
+        query=q,
+        trading_day=trading_day,
+        themes=theme,
+        symbols=symbol,
+        source_rank_min=source_rank_min,
+        top_k=top_k,
+    )
+    return {"results": [result.model_dump(mode="json") for result in results]}
 
 
 @app.get("/api/market/quotes")
