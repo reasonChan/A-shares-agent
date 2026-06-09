@@ -8,8 +8,10 @@ import {
   ChevronRight,
   CheckCircle2,
   Clock,
+  Database,
   FileText,
   Gauge,
+  GitBranch,
   ListFilter,
   Newspaper,
   Play,
@@ -22,6 +24,9 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  fetchObservabilityEvents,
+  fetchObservabilityMetrics,
+  fetchObservabilityTraces,
   fetchHealth,
   fetchMarketQuotes,
   fetchPremarketLatest,
@@ -30,6 +35,7 @@ import {
   fetchStockPage,
   runAll,
   runJob,
+  searchKnowledge,
 } from './api.js';
 import './styles.css';
 
@@ -78,6 +84,15 @@ function App() {
   const [premarket, setPremarket] = useState(null);
   const [premarketLoading, setPremarketLoading] = useState(false);
   const [premarketError, setPremarketError] = useState('');
+  const [observability, setObservability] = useState({
+    events: [],
+    traces: [],
+    metrics: [],
+    knowledgeResults: [],
+  });
+  const [observabilityLoading, setObservabilityLoading] = useState(false);
+  const [observabilityError, setObservabilityError] = useState('');
+  const [knowledgeQuery, setKnowledgeQuery] = useState('机器人');
   const startedAtRef = useRef({});
 
   const refreshMarket = useCallback(async () => {
@@ -134,6 +149,29 @@ function App() {
     }
   }, []);
 
+  const refreshObservability = useCallback(async () => {
+    setObservabilityLoading(true);
+    setObservabilityError('');
+    try {
+      const [eventsData, tracesData, metricsData, knowledgeData] = await Promise.all([
+        fetchObservabilityEvents(),
+        fetchObservabilityTraces(),
+        fetchObservabilityMetrics(),
+        searchKnowledge({ q: knowledgeQuery || '盘前', tradingDay: date, themes: [] }),
+      ]);
+      setObservability({
+        events: eventsData.events || [],
+        traces: tracesData.traces || [],
+        metrics: metricsData.metrics || [],
+        knowledgeResults: knowledgeData.results || [],
+      });
+    } catch (error) {
+      setObservabilityError(error.message);
+    } finally {
+      setObservabilityLoading(false);
+    }
+  }, [date, knowledgeQuery]);
+
   useEffect(() => {
     fetchHealth().then(setHealth).catch((error) => {
       setHealth({ status: 'failed', error: error.message });
@@ -151,6 +189,10 @@ function App() {
   useEffect(() => {
     refreshPremarket().catch(() => {});
   }, [refreshPremarket]);
+
+  useEffect(() => {
+    refreshObservability().catch(() => {});
+  }, [refreshObservability]);
 
   useEffect(() => {
     refreshStocks().catch(() => {});
@@ -192,6 +234,7 @@ function App() {
       setResults((current) => ({ ...current, [job]: result }));
       if (job === 'premarket') {
         await refreshPremarket();
+        await refreshObservability();
       }
       if (job === 'review') {
         await refreshReports();
@@ -214,7 +257,7 @@ function App() {
       setRunning((current) => ({ ...current, [job]: false }));
       setTimers((current) => ({ ...current, [job]: 0 }));
     }
-  }, [date, refreshPremarket, refreshReports]);
+  }, [date, refreshObservability, refreshPremarket, refreshReports]);
 
   const executeAll = useCallback(async () => {
     const allKey = 'all';
@@ -243,6 +286,7 @@ function App() {
       setResults((current) => ({ ...current, ...nextResults }));
       await refreshPremarket();
       await refreshReports();
+      await refreshObservability();
     } catch (error) {
       setResults((current) => ({
         ...current,
@@ -261,7 +305,7 @@ function App() {
       setRunning((current) => ({ ...current, [allKey]: false }));
       setTimers((current) => ({ ...current, [allKey]: 0 }));
     }
-  }, [date, refreshPremarket, refreshReports]);
+  }, [date, refreshObservability, refreshPremarket, refreshReports]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -348,6 +392,15 @@ function App() {
         }}
         onAscChange={setStockAsc}
         onFilterChange={setStockFilter}
+      />
+
+      <ObservabilityPanel
+        data={observability}
+        loading={observabilityLoading}
+        error={observabilityError}
+        query={knowledgeQuery}
+        onQueryChange={setKnowledgeQuery}
+        onRefresh={refreshObservability}
       />
 
       <section className="workspace">
@@ -544,6 +597,83 @@ function PremarketPanel({ report, loading, error, onRefresh, onRun }) {
       ) : (
         <div className="premarket-empty">还没有盘前简报，点击运行盘前 Agent 生成。</div>
       )}
+    </section>
+  );
+}
+
+function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefresh }) {
+  const metricSummary = useMemo(() => summarizeMetrics(data.metrics), [data.metrics]);
+  const latestEvents = data.events.slice(0, 8);
+  const latestTraces = data.traces.slice(-8).reverse();
+  const knowledgeResults = data.knowledgeResults.slice(0, 6);
+  return (
+    <section className="observability-panel">
+      <div className="observability-header">
+        <div className="section-title">
+          <GitBranch size={18} />
+          <span>可观测性与 RAG</span>
+        </div>
+        <div className="observability-actions">
+          <label className="knowledge-search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="检索证据，如 机器人 / 半导体"
+            />
+          </label>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新观测数据">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      {error ? <div className="market-error">{error}</div> : null}
+      <div className="observability-grid">
+        <div className="observability-card">
+          <h2>Event Stream</h2>
+          <ul className="trace-list">
+            {latestEvents.length === 0 ? <li>暂无事件</li> : latestEvents.map((event) => (
+              <li key={event.event_id}>
+                <strong>{event.topic}</strong>
+                <span>{event.producer} · {event.run_id || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card">
+          <h2>Trace Timeline</h2>
+          <ul className="trace-list">
+            {latestTraces.length === 0 ? <li>暂无 trace</li> : latestTraces.map((trace) => (
+              <li key={trace.trace_id}>
+                <strong className={`trace-${trace.status}`}>{trace.step}</strong>
+                <span>{trace.agent} · {formatMs(trace.duration_ms)} · {trace.decision_summary || trace.status}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card">
+          <h2>Metrics</h2>
+          <div className="metric-mini-grid">
+            {metricSummary.map((item) => (
+              <div key={item.name}>
+                <span>{item.name}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="observability-card">
+          <h2>RAG Evidence</h2>
+          <ul className="trace-list">
+            {knowledgeResults.length === 0 ? <li>暂无检索结果</li> : knowledgeResults.map((item) => (
+              <li key={item.record.record_id}>
+                <strong>{item.record.title}</strong>
+                <span>{item.record.source || item.record.source_rank} · score {Number(item.score).toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </section>
   );
 }
@@ -847,6 +977,20 @@ function buildSummary(results) {
     { label: '模拟成交', value: brokerFill ? `${brokerFill.quantity}@${Number(brokerFill.price).toFixed(3)}` : '-' },
     { label: '复盘净收益', value: review?.pnl ? Number(review.pnl.net_pnl).toFixed(2) : '-' },
   ];
+}
+
+function summarizeMetrics(metrics) {
+  const totals = new Map();
+  for (const metric of metrics) {
+    const current = totals.get(metric.name) || 0;
+    totals.set(metric.name, current + Number(metric.value || 0));
+  }
+  const preferred = ['agent_run_total', 'data_source_fetch_total', 'rag_index_records_total', 'agent_run_duration_ms'];
+  const rows = preferred
+    .filter((name) => totals.has(name))
+    .map((name) => ({ name, value: name.endsWith('_ms') ? formatMs(totals.get(name)) : totals.get(name).toFixed(0) }));
+  if (rows.length > 0) return rows;
+  return [{ name: 'metrics', value: String(metrics.length) }];
 }
 
 createRoot(document.getElementById('root')).render(<App />);

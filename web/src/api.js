@@ -67,3 +67,29 @@ export function fetchStockPage({ page, pageSize, sort, asc }) {
   });
   return request(`/api/market/stocks?${params.toString()}`);
 }
+
+export function fetchObservabilityEvents(topic = '') {
+  const params = new URLSearchParams({ limit: '80' });
+  if (topic) params.set('topic', topic);
+  return request(`/api/observability/events?${params.toString()}`);
+}
+
+export function fetchObservabilityTraces() {
+  return request('/api/observability/traces?limit=80');
+}
+
+export function fetchObservabilityMetrics() {
+  return request('/api/observability/metrics?limit=80');
+}
+
+export function searchKnowledge({ q, tradingDay, themes = [] }) {
+  const params = new URLSearchParams({
+    q,
+    top_k: '8',
+  });
+  if (tradingDay) params.set('trading_day', tradingDay);
+  for (const theme of themes) {
+    if (theme) params.append('theme', theme);
+  }
+  return request(`/api/observability/knowledge/search?${params.toString()}`);
+}

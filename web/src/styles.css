@@ -636,6 +636,149 @@ h1 {
   font-weight: 600;
 }
 
+.observability-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.observability-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.observability-header .section-title {
+  margin-bottom: 0;
+}
+
+.observability-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.knowledge-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 320px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #888888;
+}
+
+.knowledge-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #111111;
+}
+
+.observability-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.observability-card {
+  min-width: 0;
+  min-height: 188px;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.observability-card h2 {
+  margin: 0 0 10px;
+  color: #555555;
+  font-size: 13px;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-list li {
+  display: grid;
+  gap: 2px;
+  min-height: 34px;
+}
+
+.trace-list strong,
+.trace-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-list strong {
+  color: #111111;
+}
+
+.trace-list span {
+  color: #888888;
+  font-size: 12px;
+}
+
+.trace-success {
+  color: #008500 !important;
+}
+
+.trace-failed {
+  color: #FF2D19 !important;
+}
+
+.metric-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric-mini-grid div {
+  min-height: 64px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.metric-mini-grid span,
+.metric-mini-grid strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-mini-grid span {
+  color: #888888;
+  font-size: 12px;
+}
+
+.metric-mini-grid strong {
+  margin-top: 6px;
+  color: #111111;
+  font-size: 18px;
+}
+
 .control-panel,
 .output-panel,
 .report-panel {
