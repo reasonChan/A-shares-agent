@@ -43,6 +43,10 @@ export function fetchPremarketContext() {
   return request('/api/premarket/context');
 }
 
+export function fetchIntradayLatest() {
+  return request('/api/intraday/latest');
+}
+
 export async function fetchReport(name) {
   const response = await fetch(`/api/reports/${encodeURIComponent(name)}`);
   if (!response.ok) {

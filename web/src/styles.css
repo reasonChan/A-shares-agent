@@ -636,6 +636,186 @@ h1 {
   font-weight: 600;
 }
 
+.intraday-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #F0F0F0;
+  border-left: 4px solid #0A77F5;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.intraday-header,
+.intraday-actions,
+.intraday-meta {
+  display: flex;
+  align-items: center;
+}
+
+.intraday-header {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.intraday-header .section-title {
+  margin-bottom: 0;
+}
+
+.intraday-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.intraday-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.intraday-summary div {
+  min-height: 64px;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.intraday-summary span,
+.intraday-summary strong {
+  display: block;
+}
+
+.intraday-summary span,
+.intraday-meta {
+  color: #888888;
+}
+
+.intraday-summary strong {
+  margin-top: 4px;
+  color: #111111;
+  font-size: 18px;
+}
+
+.intraday-lead {
+  margin: 0 0 8px;
+  color: #111111;
+  font-weight: 600;
+}
+
+.intraday-meta {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.intraday-layout {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.intraday-card {
+  min-width: 0;
+  min-height: 170px;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.intraday-card h2 {
+  margin: 0 0 10px;
+  color: #555555;
+  font-size: 13px;
+}
+
+.intraday-table-wrap {
+  overflow: auto;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.intraday-table {
+  width: 100%;
+  min-width: 940px;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.intraday-table th,
+.intraday-table td {
+  height: 38px;
+  padding: 0 12px;
+  border-bottom: 1px solid #F0F0F0;
+  white-space: nowrap;
+}
+
+.intraday-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #FAFAFA;
+  color: #555555;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.intraday-table tbody tr:hover {
+  background: #F5FAFF;
+}
+
+.intraday-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.intraday-table .number {
+  text-align: right;
+}
+
+.intraday-status {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-tradable {
+  color: #FF2D19;
+  background: #FFF1F0;
+}
+
+.status-watch {
+  color: #7A3100;
+  background: #FFFAD8;
+}
+
+.status-blocked {
+  color: #555555;
+  background: #F0F0F0;
+}
+
+.status-no_signal {
+  color: #888888;
+  background: #FAFAFA;
+}
+
+.intraday-reason {
+  max-width: 360px;
+  overflow: hidden;
+  color: #555555;
+  text-overflow: ellipsis;
+}
+
 .observability-panel {
   margin-bottom: 16px;
   padding: 16px;
@@ -1081,6 +1261,7 @@ kbd {
   }
 
   .observability-grid,
+  .intraday-layout,
   .decision-grid,
   .workspace {
     grid-template-columns: 320px minmax(0, 1fr);
@@ -1111,6 +1292,8 @@ kbd {
   .quote-list,
   .quote-list.compact,
   .observability-grid,
+  .intraday-summary,
+  .intraday-layout,
   .decision-grid,
   .workspace,
   .summary-strip {
@@ -1122,6 +1305,8 @@ kbd {
   .market-meta,
   .premarket-header,
   .premarket-actions,
+  .intraday-header,
+  .intraday-actions,
   .stock-header,
   .stock-actions,
   .observability-header,
@@ -1151,6 +1336,7 @@ kbd {
   .stock-actions select,
   .stock-actions .toggle-button,
   .stock-actions .refresh-button,
+  .intraday-actions .refresh-button,
   .observability-actions .refresh-button,
   .decision-actions .refresh-button {
     width: 100%;

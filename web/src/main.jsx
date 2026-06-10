@@ -29,6 +29,7 @@ import {
   fetchObservabilityTraces,
   fetchDecisionTraces,
   fetchHealth,
+  fetchIntradayLatest,
   fetchMarketQuotes,
   fetchPremarketContext,
   fetchPremarketLatest,
@@ -87,6 +88,9 @@ function App() {
   const [premarket, setPremarket] = useState(null);
   const [premarketLoading, setPremarketLoading] = useState(false);
   const [premarketError, setPremarketError] = useState('');
+  const [intraday, setIntraday] = useState({ report: null, event: null });
+  const [intradayLoading, setIntradayLoading] = useState(false);
+  const [intradayError, setIntradayError] = useState('');
   const [observability, setObservability] = useState({
     events: [],
     traces: [],
@@ -157,6 +161,19 @@ function App() {
     }
   }, []);
 
+  const refreshIntraday = useCallback(async () => {
+    setIntradayLoading(true);
+    setIntradayError('');
+    try {
+      const data = await fetchIntradayLatest();
+      setIntraday(data);
+    } catch (error) {
+      setIntradayError(error.message);
+    } finally {
+      setIntradayLoading(false);
+    }
+  }, []);
+
   const refreshObservability = useCallback(async () => {
     setObservabilityLoading(true);
     setObservabilityError('');
@@ -214,6 +231,10 @@ function App() {
   }, [refreshPremarket]);
 
   useEffect(() => {
+    refreshIntraday().catch(() => {});
+  }, [refreshIntraday]);
+
+  useEffect(() => {
     refreshObservability().catch(() => {});
   }, [refreshObservability]);
 
@@ -259,6 +280,10 @@ function App() {
         await refreshPremarket();
         await refreshObservability();
       }
+      if (job === 'intraday') {
+        await refreshIntraday();
+        await refreshObservability();
+      }
       if (job === 'review') {
         await refreshReports();
       }
@@ -280,7 +305,7 @@ function App() {
       setRunning((current) => ({ ...current, [job]: false }));
       setTimers((current) => ({ ...current, [job]: 0 }));
     }
-  }, [date, refreshObservability, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
 
   const executeAll = useCallback(async () => {
     const allKey = 'all';
@@ -308,6 +333,7 @@ function App() {
       };
       setResults((current) => ({ ...current, ...nextResults }));
       await refreshPremarket();
+      await refreshIntraday();
       await refreshReports();
       await refreshObservability();
     } catch (error) {
@@ -328,7 +354,7 @@ function App() {
       setRunning((current) => ({ ...current, [allKey]: false }));
       setTimers((current) => ({ ...current, [allKey]: 0 }));
     }
-  }, [date, refreshObservability, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -415,6 +441,14 @@ function App() {
         }}
         onAscChange={setStockAsc}
         onFilterChange={setStockFilter}
+      />
+
+      <IntradayAnalysisPanel
+        data={intraday}
+        loading={intradayLoading || Boolean(running.intraday)}
+        error={intradayError}
+        onRefresh={refreshIntraday}
+        onRun={() => executeJob('intraday')}
       />
 
       <ObservabilityPanel
@@ -629,6 +663,158 @@ function PremarketPanel({ report, loading, error, onRefresh, onRun }) {
         <div className="premarket-empty">还没有盘前简报，点击运行盘前 Agent 生成。</div>
       )}
     </section>
+  );
+}
+
+function IntradayAnalysisPanel({ data, loading, error, onRefresh, onRun }) {
+  const report = data?.report;
+  const event = data?.event;
+  const symbols = [...(report?.symbols || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const themes = report?.themes || [];
+  const filteredSignals = symbols.flatMap((symbol) => (
+    (symbol.signals || [])
+      .filter((signal) => signal.status === 'filtered')
+      .map((signal) => ({ ...signal, symbol: symbol.symbol }))
+  ));
+  return (
+    <section className="intraday-panel">
+      <div className="intraday-header">
+        <div className="section-title">
+          <Activity size={18} />
+          <span>盘中分析</span>
+        </div>
+        <div className="intraday-actions">
+          <button className="toggle-button" type="button" onClick={onRun} disabled={loading}>
+            {loading ? '扫描中' : '运行盘中 Agent'}
+          </button>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新盘中分析">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      {error ? <div className="market-error">{error}</div> : null}
+      {report ? (
+        <>
+          <div className="intraday-summary">
+            <div>
+              <span>市场状态</span>
+              <strong>{report.market_state?.risk_mode || '-'}</strong>
+            </div>
+            <div>
+              <span>行情质量</span>
+              <strong>{report.market_state?.data_quality || '-'}</strong>
+            </div>
+            <div>
+              <span>交易意图</span>
+              <strong>{report.trade_intent_count || 0}</strong>
+            </div>
+            <div>
+              <span>覆盖标的</span>
+              <strong>{report.symbol_count || 0}</strong>
+            </div>
+          </div>
+          <p className="intraday-lead">{report.summary}</p>
+          <div className="intraday-meta">
+            <span>事件：{event?.event_id || '-'}</span>
+            <span>交易日：{event?.trading_day || '-'}</span>
+            <span>生成：{formatDateTime(report.generated_at || event?.created_at)}</span>
+          </div>
+          <div className="intraday-layout">
+            <div className="intraday-card">
+              <h2>市场判断</h2>
+              <ul className="trace-list">
+                {(report.market_state?.reasons || []).length === 0 ? (
+                  <li>暂无额外市场约束</li>
+                ) : report.market_state.reasons.map((reason) => (
+                  <li key={reason}>
+                    <strong>{report.market_state.regime || 'market'}</strong>
+                    <span>{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>重点板块</h2>
+              <ul className="trace-list">
+                {themes.length === 0 ? <li>暂无板块聚合</li> : themes.slice(0, 5).map((theme) => (
+                  <li key={theme.theme_name}>
+                    <strong>{theme.theme_name} · {formatScore(theme.avg_score)}</strong>
+                    <span>{theme.symbols?.join(', ') || '-'} · 强度 {formatPercentValue(theme.avg_theme_strength)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>候选信号</h2>
+              <ul className="trace-list">
+                {symbols.filter((item) => item.signals?.length).length === 0 ? <li>暂无策略候选</li> : symbols
+                  .filter((item) => item.signals?.length)
+                  .slice(0, 5)
+                  .map((item) => (
+                    <li key={item.symbol}>
+                      <strong>{item.symbol} · {statusLabel(item.status)}</strong>
+                      <span>{item.signals[0].strategy_id} · {formatScore(item.signals[0].confidence)}</span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>过滤原因</h2>
+              <ul className="trace-list">
+                {filteredSignals.length === 0 ? <li>暂无被过滤信号</li> : filteredSignals.slice(0, 5).map((signal) => (
+                  <li key={signal.signal_id}>
+                    <strong>{signal.symbol} · {signal.filter_reason}</strong>
+                    <span>{signal.reasons?.join(' / ') || '-'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <div className="intraday-table-wrap">
+            <table className="intraday-table">
+              <thead>
+                <tr>
+                  <th>标的</th>
+                  <th>状态</th>
+                  <th className="number">评分</th>
+                  <th className="number">价格</th>
+                  <th className="number">5分钟</th>
+                  <th className="number">量比</th>
+                  <th>板块</th>
+                  <th>关键原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {symbols.length === 0 ? (
+                  <tr>
+                    <td className="stock-empty-row" colSpan="8">{loading ? '正在扫描' : '暂无盘中分析'}</td>
+                  </tr>
+                ) : symbols.map((symbol) => (
+                  <IntradaySymbolRow key={symbol.symbol} symbol={symbol} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <div className="premarket-empty">还没有盘中分析，点击运行盘中 Agent 生成。</div>
+      )}
+    </section>
+  );
+}
+
+function IntradaySymbolRow({ symbol }) {
+  return (
+    <tr>
+      <td><strong>{symbol.symbol}</strong></td>
+      <td><span className={`intraday-status status-${symbol.status}`}>{statusLabel(symbol.status)}</span></td>
+      <td className="number">{formatScore(symbol.score)}</td>
+      <td className="number">{formatPrice(symbol.last_price)}</td>
+      <td className="number">{formatPercentValue(symbol.features?.return_5m)}</td>
+      <td className="number">{formatPlain(symbol.features?.volume_ratio_5m)}</td>
+      <td>{symbol.features?.primary_theme || '-'}</td>
+      <td className="intraday-reason">{symbol.reasons?.[0] || '-'}</td>
+    </tr>
   );
 }
 
@@ -1049,7 +1235,17 @@ function formatRatio(value) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function formatPercentValue(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
 function formatPlain(value) {
+  if (value === null || value === undefined) return '-';
+  return Number(value).toFixed(2);
+}
+
+function formatScore(value) {
   if (value === null || value === undefined) return '-';
   return Number(value).toFixed(2);
 }
@@ -1090,7 +1286,10 @@ function OutputView({ result, running, elapsed }) {
 }
 
 function buildSummary(results) {
-  const intent = Array.isArray(results.intraday?.parsed) ? results.intraday.parsed[0] : null;
+  const intradayParsed = results.intraday?.parsed;
+  const intent = Array.isArray(intradayParsed)
+    ? intradayParsed[0]
+    : intradayParsed?.intents?.[0] || intradayParsed?.analysis?.generated_intents?.[0] || null;
   const risk = results.risk?.parsed;
   const brokerFill = Array.isArray(results.broker?.parsed) ? results.broker.parsed[0] : null;
   const review = results.review?.parsed;
@@ -1100,6 +1299,15 @@ function buildSummary(results) {
     { label: '模拟成交', value: brokerFill ? `${brokerFill.quantity}@${Number(brokerFill.price).toFixed(3)}` : '-' },
     { label: '复盘净收益', value: review?.pnl ? Number(review.pnl.net_pnl).toFixed(2) : '-' },
   ];
+}
+
+function statusLabel(value) {
+  return {
+    tradable: '可交易',
+    watch: '观察',
+    blocked: '受限',
+    no_signal: '无信号',
+  }[value] || value || '-';
 }
 
 function summarizeMetrics(metrics) {
