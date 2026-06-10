@@ -1,4 +1,5 @@
 from .embeddings import DeterministicEmbeddingProvider, EmbeddingProvider
+from .rag_service import PreMarketRAGService
 from .schemas import (
     EvidenceItem,
     EvidencePack,
@@ -17,6 +18,7 @@ __all__ = [
     "EvidencePack",
     "RAGDocument",
     "RAGEvaluationMetrics",
+    "PreMarketRAGService",
     "RetrievalFilter",
     "RetrievalResult",
     "RetrievalTask",

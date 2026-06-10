@@ -39,3 +39,4 @@ configs:
   strategy_registry: configs/strategy_registry.yaml
   watchlist: configs/symbols.watchlist.yaml
   premarket: configs/premarket.yaml
+  rag_premarket: configs/rag.premarket.yaml

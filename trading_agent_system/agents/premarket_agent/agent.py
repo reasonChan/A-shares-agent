@@ -22,6 +22,7 @@ from trading_agent_system.schemas import (
 
 from .builders import RiskFilter, ScenarioBuilder, ThemeDetector
 from .pipeline import EventClusterer, EventScorer
+from .rag.rag_service import PreMarketRAGService
 from .schemas import (
     Actionability,
     AuctionSignal,
@@ -72,6 +73,46 @@ SYMBOL_KEYWORDS: dict[str, str] = {
 }
 
 
+def _premarket_window_id(window: PreMarketWindow) -> str:
+    return f"pmw_{window.trading_day.isoformat()}"
+
+
+def _evidence_ids_from_packs(packs: list[dict[str, object]]) -> list[str]:
+    evidence_ids: list[str] = []
+    for pack in packs:
+        items = pack.get("items", [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and item.get("evidence_id"):
+                evidence_ids.append(str(item["evidence_id"]))
+    return evidence_ids
+
+
+def _unique_strings(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    values: list[str] = []
+    for group in groups:
+        for value in group:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+    return values
+
+
+def _instruction_refs(
+    brief: MorningBrief,
+    radar: OpeningRadar,
+    *event_id_groups: list[str],
+) -> tuple[list[str], list[str]]:
+    evidence_event_ids = _unique_strings(*event_id_groups)
+    source_ids = _unique_strings(brief.source_ids, radar.source_ids)
+    if not evidence_event_ids and not source_ids:
+        source_ids = ["system"]
+    return evidence_event_ids, source_ids
+
+
 class PremarketAgent:
     def __init__(
         self,
@@ -82,6 +123,7 @@ class PremarketAgent:
         trace_logger: TraceLogger | None = None,
         metrics: MetricsRecorder | None = None,
         knowledge_indexer: RagIndexer | None = None,
+        premarket_rag_service: PreMarketRAGService | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.audit = audit
@@ -90,6 +132,7 @@ class PremarketAgent:
         self.trace_logger = trace_logger
         self.metrics = metrics
         self.knowledge_indexer = knowledge_indexer
+        self.premarket_rag_service = premarket_rag_service
         self.scorer = EventScorer()
         self.clusterer = EventClusterer()
         self.theme_detector = ThemeDetector()
@@ -195,6 +238,7 @@ class PremarketAgent:
         morning_brief_payload = morning_brief.model_dump(mode="json")
         instruction_payload = instruction.model_dump(mode="json")
         indexed_count = 0
+        rag_pack_payloads: list[dict[str, object]] = []
         if self.knowledge_indexer is not None:
             records = self.knowledge_indexer.index_premarket_payload(
                 trading_day=window.trading_day,
@@ -206,6 +250,26 @@ class PremarketAgent:
             )
             indexed_count = len(records)
             self._metric("rag_index_records_total", indexed_count, tags={"agent": "premarket"}, run_id=run_id)
+        if self.premarket_rag_service is not None:
+            rag_documents = self.premarket_rag_service.index_payloads(
+                trading_day=window.trading_day,
+                premarket_window_id=_premarket_window_id(window),
+                raw_documents=raw_document_payloads,
+                events=event_payloads,
+                clusters=cluster_payloads,
+            )
+            packs = self.premarket_rag_service.retrieve_all_evidence_packs(
+                window.trading_day,
+                _premarket_window_id(window),
+            )
+            rag_pack_payloads = [pack.model_dump(mode="json") for pack in packs]
+            self._metric("rag_qdrant_index_records_total", len(rag_documents), tags={"agent": "premarket"}, run_id=run_id)
+            self._metric(
+                "rag_evidence_token_estimate",
+                sum(pack.token_estimate for pack in packs),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
         self._trace(
             run_id=run_id,
             step="build_outputs",
@@ -221,6 +285,21 @@ class PremarketAgent:
         self._publish("premarket.morning_brief", morning_brief_payload, window, run_id, morning_brief.source_ids)
         self._publish("premarket.opening_radar", opening_radar.model_dump(mode="json"), window, run_id, opening_radar.source_ids)
         self._publish("premarket.instructions", instruction_payload, window, run_id, instruction.source_ids)
+        if rag_pack_payloads:
+            rag_evidence_event = {
+                "trading_day": window.trading_day.isoformat(),
+                "premarket_window_id": _premarket_window_id(window),
+                "pack_count": len(rag_pack_payloads),
+                "token_estimate": sum(int(pack.get("token_estimate") or 0) for pack in rag_pack_payloads),
+                "packs": rag_pack_payloads,
+            }
+            self._publish(
+                "premarket.rag_evidence_packs",
+                rag_evidence_event,
+                window,
+                run_id,
+                _evidence_ids_from_packs(rag_pack_payloads),
+            )
         self._publish("premarket.reports", report, window, run_id, morning_brief.source_ids)
         self._metric("agent_run_total", 1, tags={"agent": "premarket", "status": "success"}, run_id=run_id)
         self._metric(
@@ -561,46 +640,56 @@ class PremarketAgent:
     ) -> PreMarketInstruction:
         items: list[PreMarketInstructionItem] = []
         for plan in watchlist[:12]:
+            evidence_event_ids, source_ids = _instruction_refs(brief, radar, brief.top_event_ids[:5])
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.WATCH_OPENING_AUCTION,
                     target=plan.symbol,
                     reason=plan.reason,
-                    evidence_event_ids=brief.top_event_ids[:5],
-                    source_ids=brief.source_ids,
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=bool(plan.risk_flags),
                 )
             )
         for plan in avoid_list[:12]:
+            evidence_event_ids, source_ids = _instruction_refs(
+                brief,
+                radar,
+                brief.risk_event_ids[:5],
+                brief.top_event_ids[:5],
+            )
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.AVOID_NEW_ENTRY,
                     target=plan.symbol,
                     reason=plan.reason,
-                    evidence_event_ids=brief.risk_event_ids[:5] or brief.top_event_ids[:5],
-                    source_ids=brief.source_ids,
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=True,
                 )
             )
         if warnings:
+            evidence_event_ids, source_ids = _instruction_refs(brief, radar)
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.REQUIRE_CONFIRMATION,
                     target="ALL",
                     reason="盘前消息源或竞价确认不足，开盘前需要人工确认。",
-                    source_ids=brief.source_ids or radar.source_ids or ["system"],
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=True,
                 )
             )
+        source_ids = _unique_strings(brief.source_ids, radar.source_ids, *[item.source_ids for item in items])
         return PreMarketInstruction(
             instruction_id=make_id("pmins"),
             trading_day=window.trading_day,
             generated_at=datetime.now(CHINA_TZ),
             items=items,
-            source_ids=brief.source_ids,
+            source_ids=source_ids,
             warnings=[*warnings, *radar.warnings],
         )
 
