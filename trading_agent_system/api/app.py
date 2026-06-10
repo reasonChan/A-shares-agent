@@ -172,6 +172,26 @@ def premarket_context_latest() -> dict[str, object]:
     return {"context": context.model_dump(mode="json") if context else None}
 
 
+@app.get("/api/intraday/latest")
+def latest_intraday_analysis() -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    envelopes = repository.load_envelopes("intraday.analysis", limit=1)
+    if not envelopes:
+        return {"report": None, "event": None}
+    envelope = envelopes[-1]
+    return {
+        "report": envelope.payload,
+        "event": {
+            "event_id": envelope.event_id,
+            "producer": envelope.producer,
+            "run_id": envelope.run_id,
+            "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+            "created_at": envelope.created_at.isoformat(),
+            "evidence_ids": envelope.evidence_ids,
+        },
+    }
+
+
 @app.get("/api/observability/events")
 def observability_events(topic: str | None = None, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
     repository = JsonlEventRepository(EVENT_DIR)
