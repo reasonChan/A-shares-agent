@@ -22,6 +22,7 @@ from trading_agent_system.schemas import (
 
 from .builders import RiskFilter, ScenarioBuilder, ThemeDetector
 from .pipeline import EventClusterer, EventScorer
+from .rag.evaluation import RAGEvaluator
 from .rag.rag_service import PreMarketRAGService
 from .schemas import (
     Actionability,
@@ -78,6 +79,7 @@ def _premarket_window_id(window: PreMarketWindow) -> str:
 
 
 def _evidence_ids_from_packs(packs: list[dict[str, object]]) -> list[str]:
+    seen: set[str] = set()
     evidence_ids: list[str] = []
     for pack in packs:
         items = pack.get("items", [])
@@ -85,7 +87,11 @@ def _evidence_ids_from_packs(packs: list[dict[str, object]]) -> list[str]:
             continue
         for item in items:
             if isinstance(item, dict) and item.get("evidence_id"):
-                evidence_ids.append(str(item["evidence_id"]))
+                evidence_id = str(item["evidence_id"])
+                if evidence_id in seen:
+                    continue
+                seen.add(evidence_id)
+                evidence_ids.append(evidence_id)
     return evidence_ids
 
 
@@ -239,6 +245,7 @@ class PremarketAgent:
         instruction_payload = instruction.model_dump(mode="json")
         indexed_count = 0
         rag_pack_payloads: list[dict[str, object]] = []
+        rag_evaluation_payload: dict[str, object] | None = None
         if self.knowledge_indexer is not None:
             records = self.knowledge_indexer.index_premarket_payload(
                 trading_day=window.trading_day,
@@ -262,11 +269,32 @@ class PremarketAgent:
                 window.trading_day,
                 _premarket_window_id(window),
             )
+            evaluator = RAGEvaluator()
+            evaluation_metrics = evaluator.evaluate_packs(packs)
+            evaluation_summary = evaluator.summarize(evaluation_metrics)
             rag_pack_payloads = [pack.model_dump(mode="json") for pack in packs]
+            rag_evaluation_payload = {
+                "trading_day": window.trading_day.isoformat(),
+                "premarket_window_id": _premarket_window_id(window),
+                "metrics": [metric.model_dump(mode="json") for metric in evaluation_metrics],
+                "summary": evaluation_summary,
+            }
             self._metric("rag_qdrant_index_records_total", len(rag_documents), tags={"agent": "premarket"}, run_id=run_id)
             self._metric(
                 "rag_evidence_token_estimate",
                 sum(pack.token_estimate for pack in packs),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
+            self._metric(
+                "rag_evidence_coverage_ratio",
+                float(evaluation_summary["avg_evidence_coverage_ratio"]),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
+            self._metric(
+                "rag_duplicate_ratio",
+                float(evaluation_summary["avg_duplicate_ratio"]),
                 tags={"agent": "premarket"},
                 run_id=run_id,
             )
@@ -296,6 +324,14 @@ class PremarketAgent:
             self._publish(
                 "premarket.rag_evidence_packs",
                 rag_evidence_event,
+                window,
+                run_id,
+                _evidence_ids_from_packs(rag_pack_payloads),
+            )
+        if rag_evaluation_payload is not None:
+            self._publish(
+                "premarket.rag_evaluation",
+                rag_evaluation_payload,
                 window,
                 run_id,
                 _evidence_ids_from_packs(rag_pack_payloads),

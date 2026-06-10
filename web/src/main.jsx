@@ -8,7 +8,6 @@ import {
   ChevronRight,
   CheckCircle2,
   Clock,
-  Database,
   FileText,
   Gauge,
   GitBranch,
@@ -33,6 +32,7 @@ import {
   fetchMarketQuotes,
   fetchPremarketContext,
   fetchPremarketLatest,
+  fetchPremarketRagLatest,
   fetchRagDebug,
   fetchReport,
   fetchReports,
@@ -100,6 +100,7 @@ function App() {
     approvalQueue: [],
     decisionTimeline: [],
     ragDebug: null,
+    premarketRag: null,
   });
   const [observabilityLoading, setObservabilityLoading] = useState(false);
   const [observabilityError, setObservabilityError] = useState('');
@@ -186,6 +187,7 @@ function App() {
         approvalData,
         decisionData,
         ragDebugData,
+        premarketRagData,
       ] = await Promise.all([
         fetchObservabilityEvents(),
         fetchObservabilityTraces(),
@@ -194,6 +196,7 @@ function App() {
         fetchRiskApprovalQueue(),
         fetchDecisionTraces({ intentId: decisionQuery.trim() }),
         fetchRagDebug({ q: knowledgeQuery || '盘前', tradingDay: date }),
+        fetchPremarketRagLatest(),
       ]);
       setObservability({
         events: eventsData.events || [],
@@ -204,6 +207,7 @@ function App() {
         approvalQueue: approvalData.queue || [],
         decisionTimeline: decisionData.timeline || [],
         ragDebug: ragDebugData,
+        premarketRag: premarketRagData,
       });
     } catch (error) {
       setObservabilityError(error.message);
@@ -823,6 +827,14 @@ function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefr
   const latestEvents = data.events.slice(0, 8);
   const latestTraces = data.traces.slice(-8).reverse();
   const knowledgeResults = data.knowledgeResults.slice(0, 6);
+  const premarketRag = data.premarketRag || {};
+  const evidencePayload = premarketRag.evidence?.payload || {};
+  const evaluationPayload = premarketRag.evaluation?.payload || {};
+  const packs = evidencePayload.packs || [];
+  const evaluationSummary = evaluationPayload.summary || {};
+  const citationItems = packs.flatMap((pack) => (
+    (pack.items || []).map((item) => ({ ...item, section: pack.section }))
+  )).slice(0, 5);
   return (
     <section className="observability-panel">
       <div className="observability-header">
@@ -880,12 +892,46 @@ function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefr
           </div>
         </div>
         <div className="observability-card">
-          <h2>RAG Evidence</h2>
+          <h2>RAG Search</h2>
           <ul className="trace-list">
             {knowledgeResults.length === 0 ? <li>暂无检索结果</li> : knowledgeResults.map((item) => (
               <li key={item.record.record_id}>
                 <strong>{item.record.title}</strong>
                 <span>{item.record.source || item.record.source_rank} · score {Number(item.score).toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card rag-pack-card">
+          <h2>Evidence Packs</h2>
+          <div className="rag-pack-strip">
+            <span>{evidencePayload.pack_count || packs.length || 0} packs</span>
+            <span>覆盖 {formatPercentNumber(evaluationSummary.avg_evidence_coverage_ratio)}</span>
+            <span>引用 {formatPercentNumber(evaluationSummary.avg_citation_coverage_ratio)}</span>
+            <span>{evidencePayload.token_estimate || evaluationSummary.token_count || 0} tokens</span>
+          </div>
+          <ul className="trace-list">
+            {packs.length === 0 ? <li>暂无 evidence pack</li> : packs.slice(0, 6).map((pack) => (
+              <li key={pack.pack_id || pack.section}>
+                <strong>{sectionLabel(pack.section)} · {(pack.items || []).length} 条</strong>
+                <span>
+                  dup {pack.dropped_duplicates || 0} · token {pack.token_estimate || 0} · hit {pack.coverage?.evidence_count || 0}/{pack.coverage?.result_count || 0}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card rag-pack-card">
+          <h2>Citations</h2>
+          <div className="rag-pack-strip">
+            <span>来源均值 {formatScore(evaluationSummary.avg_source_rank)}</span>
+            <span>重复 {formatPercentNumber(evaluationSummary.avg_duplicate_ratio)}</span>
+          </div>
+          <ul className="trace-list rag-citation-list">
+            {citationItems.length === 0 ? <li>暂无 citation</li> : citationItems.map((item) => (
+              <li key={`${item.section}-${item.evidence_id}`}>
+                <strong>{item.citation_label || `[${item.evidence_id}]`} {item.title}</strong>
+                <span>{sectionLabel(item.section)} · source {formatScore(item.source_rank)} · {item.source || item.source_type}</span>
               </li>
             ))}
           </ul>
@@ -1240,6 +1286,11 @@ function formatPercentValue(value) {
   return `${(Number(value) * 100).toFixed(2)}%`;
 }
 
+function formatPercentNumber(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  return `${(Number(value) * 100).toFixed(0)}%`;
+}
+
 function formatPlain(value) {
   if (value === null || value === undefined) return '-';
   return Number(value).toFixed(2);
@@ -1310,16 +1361,38 @@ function statusLabel(value) {
   }[value] || value || '-';
 }
 
+function sectionLabel(value) {
+  return {
+    core_conclusion: '核心结论',
+    post_close_events: '盘后事件',
+    announcement_events: '公告',
+    portfolio_risks: '持仓风险',
+    theme_candidates: '题材候选',
+    macro_calendar: '宏观日历',
+    overseas_mapping: '海外映射',
+    avoid_list: '回避清单',
+    opening_radar: '竞价雷达',
+    premarket_instructions: '盘前指令',
+  }[value] || value || '-';
+}
+
 function summarizeMetrics(metrics) {
   const totals = new Map();
   for (const metric of metrics) {
     const current = totals.get(metric.name) || 0;
     totals.set(metric.name, current + Number(metric.value || 0));
   }
-  const preferred = ['agent_run_total', 'data_source_fetch_total', 'rag_index_records_total', 'agent_run_duration_ms'];
+  const preferred = ['agent_run_total', 'data_source_fetch_total', 'rag_qdrant_index_records_total', 'rag_evidence_coverage_ratio'];
   const rows = preferred
     .filter((name) => totals.has(name))
-    .map((name) => ({ name, value: name.endsWith('_ms') ? formatMs(totals.get(name)) : totals.get(name).toFixed(0) }));
+    .map((name) => ({
+      name,
+      value: name.endsWith('_ms')
+        ? formatMs(totals.get(name))
+        : name.endsWith('_ratio')
+          ? formatPercentNumber(totals.get(name))
+          : totals.get(name).toFixed(0),
+    }));
   if (rows.length > 0) return rows;
   return [{ name: 'metrics', value: String(metrics.length) }];
 }

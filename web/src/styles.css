@@ -1005,6 +1005,32 @@ h1 {
   font-size: 18px;
 }
 
+.rag-pack-card {
+  min-height: 212px;
+}
+
+.rag-pack-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.rag-pack-strip span {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid #E5E5E5;
+  border-radius: 4px;
+  background: #FFFFFF;
+  color: #555555;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rag-citation-list strong {
+  color: #0A77F5;
+}
+
 .control-panel,
 .output-panel,
 .report-panel {

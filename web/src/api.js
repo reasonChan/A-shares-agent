@@ -43,6 +43,10 @@ export function fetchPremarketContext() {
   return request('/api/premarket/context');
 }
 
+export function fetchPremarketRagLatest() {
+  return request('/api/premarket/rag/latest');
+}
+
 export function fetchIntradayLatest() {
   return request('/api/intraday/latest');
 }

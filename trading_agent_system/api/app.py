@@ -172,6 +172,15 @@ def premarket_context_latest() -> dict[str, object]:
     return {"context": context.model_dump(mode="json") if context else None}
 
 
+@app.get("/api/premarket/rag/latest")
+def premarket_rag_latest() -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    return {
+        "evidence": _latest_event_payload(repository, "premarket.rag_evidence_packs"),
+        "evaluation": _latest_event_payload(repository, "premarket.rag_evaluation"),
+    }
+
+
 @app.get("/api/intraday/latest")
 def latest_intraday_analysis() -> dict[str, object]:
     repository = JsonlEventRepository(EVENT_DIR)
@@ -435,6 +444,24 @@ def _payload_intent_id(payload: dict[str, object]) -> str | None:
         if isinstance(nested, dict) and nested.get("intent_id"):
             return str(nested["intent_id"])
     return None
+
+
+def _latest_event_payload(repository: JsonlEventRepository, topic: str) -> dict[str, object] | None:
+    envelopes = repository.load_envelopes(topic, limit=1)
+    if not envelopes:
+        return None
+    envelope = envelopes[-1]
+    return {
+        "event": {
+            "event_id": envelope.event_id,
+            "producer": envelope.producer,
+            "run_id": envelope.run_id,
+            "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+            "created_at": envelope.created_at.isoformat(),
+            "evidence_ids": envelope.evidence_ids,
+        },
+        "payload": envelope.payload,
+    }
 
 
 def _fetch_quotes_with_fallback(symbols: list[str]) -> tuple[str, list[object], str | None]:
