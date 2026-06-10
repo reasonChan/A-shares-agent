@@ -14,17 +14,25 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from trading_agent_system.core.config import load_yaml_config
+from trading_agent_system.core.knowledge import KnowledgeStore, RagRetriever
 from trading_agent_system.core.market_data import (
     EastMoneyMarketDataProvider,
     SinaMarketDataProvider,
     TencentMarketDataProvider,
 )
+from trading_agent_system.core.observability import MetricsRecorder, TraceLogger
+from trading_agent_system.core.premarket import PremarketContextLoader
+from trading_agent_system.core.storage import JsonlEventRepository
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = ROOT / "reports" / "daily"
 PREMARKET_REPORT_DIR = ROOT / "reports" / "premarket"
 APP_CONFIG = ROOT / "configs" / "app.yaml"
+EVENT_DIR = ROOT / "data" / "events"
+TRACE_DIR = ROOT / "data" / "traces"
+METRICS_DIR = ROOT / "data" / "metrics"
+KNOWLEDGE_PATH = ROOT / "data" / "knowledge.sqlite"
 
 
 class RunRequest(BaseModel):
@@ -157,6 +165,184 @@ def latest_premarket_report() -> dict[str, object]:
         raise HTTPException(status_code=500, detail=f"invalid premarket report: {reports[0].name}") from error
 
 
+@app.get("/api/premarket/context")
+def premarket_context_latest() -> dict[str, object]:
+    PREMARKET_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    context = PremarketContextLoader(PREMARKET_REPORT_DIR).load_latest()
+    return {"context": context.model_dump(mode="json") if context else None}
+
+
+@app.get("/api/premarket/rag/latest")
+def premarket_rag_latest() -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    return {
+        "evidence": _latest_event_payload(repository, "premarket.rag_evidence_packs"),
+        "evaluation": _latest_event_payload(repository, "premarket.rag_evaluation"),
+    }
+
+
+@app.get("/api/intraday/latest")
+def latest_intraday_analysis() -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    envelopes = repository.load_envelopes("intraday.analysis", limit=1)
+    if not envelopes:
+        return {"report": None, "event": None}
+    envelope = envelopes[-1]
+    return {
+        "report": envelope.payload,
+        "event": {
+            "event_id": envelope.event_id,
+            "producer": envelope.producer,
+            "run_id": envelope.run_id,
+            "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+            "created_at": envelope.created_at.isoformat(),
+            "evidence_ids": envelope.evidence_ids,
+        },
+    }
+
+
+@app.get("/api/observability/events")
+def observability_events(topic: str | None = None, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    topics = [topic] if topic else repository.list_topics()
+    events = []
+    for item in topics:
+        events.extend(envelope.model_dump(mode="json") for envelope in repository.load_envelopes(item, limit=limit))
+    events.sort(key=lambda event: event["created_at"], reverse=True)
+    return {"topics": topics, "events": events[:limit]}
+
+
+@app.get("/api/observability/traces")
+def observability_traces(
+    run_id: str | None = None,
+    agent: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    traces = TraceLogger(TRACE_DIR).load(run_id=run_id, agent=agent, limit=limit)
+    return {"traces": [trace.model_dump(mode="json") for trace in traces]}
+
+
+@app.get("/api/observability/metrics")
+def observability_metrics(
+    name: str | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    metrics = MetricsRecorder(METRICS_DIR).load(name=name, run_id=run_id, limit=limit)
+    return {"metrics": [metric.model_dump(mode="json") for metric in metrics]}
+
+
+@app.get("/api/observability/knowledge/search")
+def observability_knowledge_search(
+    q: str,
+    trading_day: Date | None = None,
+    theme: list[str] | None = Query(default=None),
+    symbol: list[str] | None = Query(default=None),
+    source_rank_min: str | None = None,
+    top_k: int = Query(default=8, ge=1, le=50),
+) -> dict[str, object]:
+    results = RagRetriever(KnowledgeStore(KNOWLEDGE_PATH)).search(
+        query=q,
+        trading_day=trading_day,
+        themes=theme,
+        symbols=symbol,
+        source_rank_min=source_rank_min,
+        top_k=top_k,
+    )
+    return {"results": [result.model_dump(mode="json") for result in results]}
+
+
+@app.get("/api/risk/approval-queue")
+def risk_approval_queue(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    queue = []
+    for envelope in repository.load_envelopes("risk.approval_queue", limit=limit):
+        payload = dict(envelope.payload)
+        payload.update(
+            {
+                "event_id": envelope.event_id,
+                "run_id": envelope.run_id,
+                "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+                "evidence_ids": envelope.evidence_ids,
+                "created_at": envelope.created_at.isoformat(),
+            }
+        )
+        queue.append(payload)
+    queue.sort(key=lambda item: item["created_at"], reverse=True)
+    return {"queue": queue[:limit]}
+
+
+@app.get("/api/decisions/traces")
+def decision_traces(
+    intent_id: str | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    timeline = []
+    for topic in [
+        "trading.intents",
+        "risk.decisions",
+        "risk.approval_queue",
+        "orders.instructions",
+        "orders.submitted",
+        "orders.filled",
+        "orders.cancelled",
+        "orders.rejected",
+    ]:
+        for envelope in repository.load_envelopes(topic, run_id=run_id, limit=limit):
+            payload_intent_id = _payload_intent_id(envelope.payload)
+            if intent_id and payload_intent_id != intent_id:
+                continue
+            timeline.append(
+                {
+                    "topic": envelope.topic,
+                    "event_id": envelope.event_id,
+                    "producer": envelope.producer,
+                    "run_id": envelope.run_id,
+                    "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+                    "created_at": envelope.created_at.isoformat(),
+                    "intent_id": payload_intent_id,
+                    "evidence_ids": envelope.evidence_ids,
+                    "payload": envelope.payload,
+                }
+            )
+    timeline.sort(key=lambda item: item["created_at"])
+    return {"intent_id": intent_id, "run_id": run_id, "timeline": timeline[:limit]}
+
+
+@app.get("/api/rag/debug")
+def rag_debug(
+    q: str,
+    trading_day: Date | None = None,
+    theme: list[str] | None = Query(default=None),
+    symbol: list[str] | None = Query(default=None),
+    source_rank_min: str | None = None,
+    top_k: int = Query(default=8, ge=1, le=50),
+) -> dict[str, object]:
+    filters = {
+        "q": q,
+        "trading_day": trading_day.isoformat() if trading_day else None,
+        "themes": theme or [],
+        "symbols": symbol or [],
+        "source_rank_min": source_rank_min,
+        "top_k": top_k,
+    }
+    results = RagRetriever(KnowledgeStore(KNOWLEDGE_PATH)).search(
+        query=q,
+        trading_day=trading_day,
+        themes=theme,
+        symbols=symbol,
+        source_rank_min=source_rank_min,
+        top_k=top_k,
+    )
+    return {
+        "query": filters,
+        "result_count": len(results),
+        "results": [result.model_dump(mode="json") for result in results],
+    }
+
+
 @app.get("/api/market/quotes")
 def market_quotes() -> dict[str, object]:
     config = load_yaml_config(APP_CONFIG)
@@ -247,6 +433,35 @@ def _parse_stdout(stdout: str) -> object | None:
         return parsed
     except json.JSONDecodeError:
         return None
+
+
+def _payload_intent_id(payload: dict[str, object]) -> str | None:
+    direct = payload.get("intent_id")
+    if direct:
+        return str(direct)
+    for key in ("intent", "decision", "order_instruction", "fill"):
+        nested = payload.get(key)
+        if isinstance(nested, dict) and nested.get("intent_id"):
+            return str(nested["intent_id"])
+    return None
+
+
+def _latest_event_payload(repository: JsonlEventRepository, topic: str) -> dict[str, object] | None:
+    envelopes = repository.load_envelopes(topic, limit=1)
+    if not envelopes:
+        return None
+    envelope = envelopes[-1]
+    return {
+        "event": {
+            "event_id": envelope.event_id,
+            "producer": envelope.producer,
+            "run_id": envelope.run_id,
+            "trading_day": envelope.trading_day.isoformat() if envelope.trading_day else None,
+            "created_at": envelope.created_at.isoformat(),
+            "evidence_ids": envelope.evidence_ids,
+        },
+        "payload": envelope.payload,
+    }
 
 
 def _fetch_quotes_with_fallback(symbols: list[str]) -> tuple[str, list[object], str | None]:

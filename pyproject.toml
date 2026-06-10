@@ -5,9 +5,11 @@ description = "Paper-trading A-share trading agent MVP with intraday, risk, brok
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.111,<1",
+    "numpy>=1.26,<3",
     "pydantic>=2.7,<3",
     "pytest>=8,<9",
     "PyYAML>=6.0,<7",
+    "qdrant-client>=1.9,<2",
     "uvicorn[standard]>=0.30,<1",
 ]
 

@@ -10,6 +10,7 @@ import {
   Clock,
   FileText,
   Gauge,
+  GitBranch,
   ListFilter,
   Newspaper,
   Play,
@@ -22,11 +23,20 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  fetchObservabilityEvents,
+  fetchObservabilityMetrics,
+  fetchObservabilityTraces,
+  fetchDecisionTraces,
   fetchHealth,
+  fetchIntradayLatest,
   fetchMarketQuotes,
+  fetchPremarketContext,
   fetchPremarketLatest,
+  fetchPremarketRagLatest,
+  fetchRagDebug,
   fetchReport,
   fetchReports,
+  fetchRiskApprovalQueue,
   fetchStockPage,
   runAll,
   runJob,
@@ -78,6 +88,24 @@ function App() {
   const [premarket, setPremarket] = useState(null);
   const [premarketLoading, setPremarketLoading] = useState(false);
   const [premarketError, setPremarketError] = useState('');
+  const [intraday, setIntraday] = useState({ report: null, event: null });
+  const [intradayLoading, setIntradayLoading] = useState(false);
+  const [intradayError, setIntradayError] = useState('');
+  const [observability, setObservability] = useState({
+    events: [],
+    traces: [],
+    metrics: [],
+    knowledgeResults: [],
+    premarketContext: null,
+    approvalQueue: [],
+    decisionTimeline: [],
+    ragDebug: null,
+    premarketRag: null,
+  });
+  const [observabilityLoading, setObservabilityLoading] = useState(false);
+  const [observabilityError, setObservabilityError] = useState('');
+  const [knowledgeQuery, setKnowledgeQuery] = useState('机器人');
+  const [decisionQuery, setDecisionQuery] = useState('');
   const startedAtRef = useRef({});
 
   const refreshMarket = useCallback(async () => {
@@ -134,6 +162,60 @@ function App() {
     }
   }, []);
 
+  const refreshIntraday = useCallback(async () => {
+    setIntradayLoading(true);
+    setIntradayError('');
+    try {
+      const data = await fetchIntradayLatest();
+      setIntraday(data);
+    } catch (error) {
+      setIntradayError(error.message);
+    } finally {
+      setIntradayLoading(false);
+    }
+  }, []);
+
+  const refreshObservability = useCallback(async () => {
+    setObservabilityLoading(true);
+    setObservabilityError('');
+    try {
+      const [
+        eventsData,
+        tracesData,
+        metricsData,
+        contextData,
+        approvalData,
+        decisionData,
+        ragDebugData,
+        premarketRagData,
+      ] = await Promise.all([
+        fetchObservabilityEvents(),
+        fetchObservabilityTraces(),
+        fetchObservabilityMetrics(),
+        fetchPremarketContext(),
+        fetchRiskApprovalQueue(),
+        fetchDecisionTraces({ intentId: decisionQuery.trim() }),
+        fetchRagDebug({ q: knowledgeQuery || '盘前', tradingDay: date }),
+        fetchPremarketRagLatest(),
+      ]);
+      setObservability({
+        events: eventsData.events || [],
+        traces: tracesData.traces || [],
+        metrics: metricsData.metrics || [],
+        knowledgeResults: ragDebugData.results || [],
+        premarketContext: contextData.context || null,
+        approvalQueue: approvalData.queue || [],
+        decisionTimeline: decisionData.timeline || [],
+        ragDebug: ragDebugData,
+        premarketRag: premarketRagData,
+      });
+    } catch (error) {
+      setObservabilityError(error.message);
+    } finally {
+      setObservabilityLoading(false);
+    }
+  }, [date, decisionQuery, knowledgeQuery]);
+
   useEffect(() => {
     fetchHealth().then(setHealth).catch((error) => {
       setHealth({ status: 'failed', error: error.message });
@@ -151,6 +233,14 @@ function App() {
   useEffect(() => {
     refreshPremarket().catch(() => {});
   }, [refreshPremarket]);
+
+  useEffect(() => {
+    refreshIntraday().catch(() => {});
+  }, [refreshIntraday]);
+
+  useEffect(() => {
+    refreshObservability().catch(() => {});
+  }, [refreshObservability]);
 
   useEffect(() => {
     refreshStocks().catch(() => {});
@@ -192,6 +282,11 @@ function App() {
       setResults((current) => ({ ...current, [job]: result }));
       if (job === 'premarket') {
         await refreshPremarket();
+        await refreshObservability();
+      }
+      if (job === 'intraday') {
+        await refreshIntraday();
+        await refreshObservability();
       }
       if (job === 'review') {
         await refreshReports();
@@ -214,7 +309,7 @@ function App() {
       setRunning((current) => ({ ...current, [job]: false }));
       setTimers((current) => ({ ...current, [job]: 0 }));
     }
-  }, [date, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
 
   const executeAll = useCallback(async () => {
     const allKey = 'all';
@@ -242,7 +337,9 @@ function App() {
       };
       setResults((current) => ({ ...current, ...nextResults }));
       await refreshPremarket();
+      await refreshIntraday();
       await refreshReports();
+      await refreshObservability();
     } catch (error) {
       setResults((current) => ({
         ...current,
@@ -261,7 +358,7 @@ function App() {
       setRunning((current) => ({ ...current, [allKey]: false }));
       setTimers((current) => ({ ...current, [allKey]: 0 }));
     }
-  }, [date, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -348,6 +445,31 @@ function App() {
         }}
         onAscChange={setStockAsc}
         onFilterChange={setStockFilter}
+      />
+
+      <IntradayAnalysisPanel
+        data={intraday}
+        loading={intradayLoading || Boolean(running.intraday)}
+        error={intradayError}
+        onRefresh={refreshIntraday}
+        onRun={() => executeJob('intraday')}
+      />
+
+      <ObservabilityPanel
+        data={observability}
+        loading={observabilityLoading}
+        error={observabilityError}
+        query={knowledgeQuery}
+        onQueryChange={setKnowledgeQuery}
+        onRefresh={refreshObservability}
+      />
+
+      <DecisionOpsPanel
+        data={observability}
+        loading={observabilityLoading}
+        decisionQuery={decisionQuery}
+        onDecisionQueryChange={setDecisionQuery}
+        onRefresh={refreshObservability}
       />
 
       <section className="workspace">
@@ -544,6 +666,369 @@ function PremarketPanel({ report, loading, error, onRefresh, onRun }) {
       ) : (
         <div className="premarket-empty">还没有盘前简报，点击运行盘前 Agent 生成。</div>
       )}
+    </section>
+  );
+}
+
+function IntradayAnalysisPanel({ data, loading, error, onRefresh, onRun }) {
+  const report = data?.report;
+  const event = data?.event;
+  const symbols = [...(report?.symbols || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const themes = report?.themes || [];
+  const filteredSignals = symbols.flatMap((symbol) => (
+    (symbol.signals || [])
+      .filter((signal) => signal.status === 'filtered')
+      .map((signal) => ({ ...signal, symbol: symbol.symbol }))
+  ));
+  return (
+    <section className="intraday-panel">
+      <div className="intraday-header">
+        <div className="section-title">
+          <Activity size={18} />
+          <span>盘中分析</span>
+        </div>
+        <div className="intraday-actions">
+          <button className="toggle-button" type="button" onClick={onRun} disabled={loading}>
+            {loading ? '扫描中' : '运行盘中 Agent'}
+          </button>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新盘中分析">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      {error ? <div className="market-error">{error}</div> : null}
+      {report ? (
+        <>
+          <div className="intraday-summary">
+            <div>
+              <span>市场状态</span>
+              <strong>{report.market_state?.risk_mode || '-'}</strong>
+            </div>
+            <div>
+              <span>行情质量</span>
+              <strong>{report.market_state?.data_quality || '-'}</strong>
+            </div>
+            <div>
+              <span>交易意图</span>
+              <strong>{report.trade_intent_count || 0}</strong>
+            </div>
+            <div>
+              <span>覆盖标的</span>
+              <strong>{report.symbol_count || 0}</strong>
+            </div>
+          </div>
+          <p className="intraday-lead">{report.summary}</p>
+          <div className="intraday-meta">
+            <span>事件：{event?.event_id || '-'}</span>
+            <span>交易日：{event?.trading_day || '-'}</span>
+            <span>生成：{formatDateTime(report.generated_at || event?.created_at)}</span>
+          </div>
+          <div className="intraday-layout">
+            <div className="intraday-card">
+              <h2>市场判断</h2>
+              <ul className="trace-list">
+                {(report.market_state?.reasons || []).length === 0 ? (
+                  <li>暂无额外市场约束</li>
+                ) : report.market_state.reasons.map((reason) => (
+                  <li key={reason}>
+                    <strong>{report.market_state.regime || 'market'}</strong>
+                    <span>{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>重点板块</h2>
+              <ul className="trace-list">
+                {themes.length === 0 ? <li>暂无板块聚合</li> : themes.slice(0, 5).map((theme) => (
+                  <li key={theme.theme_name}>
+                    <strong>{theme.theme_name} · {formatScore(theme.avg_score)}</strong>
+                    <span>{theme.symbols?.join(', ') || '-'} · 强度 {formatPercentValue(theme.avg_theme_strength)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>候选信号</h2>
+              <ul className="trace-list">
+                {symbols.filter((item) => item.signals?.length).length === 0 ? <li>暂无策略候选</li> : symbols
+                  .filter((item) => item.signals?.length)
+                  .slice(0, 5)
+                  .map((item) => (
+                    <li key={item.symbol}>
+                      <strong>{item.symbol} · {statusLabel(item.status)}</strong>
+                      <span>{item.signals[0].strategy_id} · {formatScore(item.signals[0].confidence)}</span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+            <div className="intraday-card">
+              <h2>过滤原因</h2>
+              <ul className="trace-list">
+                {filteredSignals.length === 0 ? <li>暂无被过滤信号</li> : filteredSignals.slice(0, 5).map((signal) => (
+                  <li key={signal.signal_id}>
+                    <strong>{signal.symbol} · {signal.filter_reason}</strong>
+                    <span>{signal.reasons?.join(' / ') || '-'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <div className="intraday-table-wrap">
+            <table className="intraday-table">
+              <thead>
+                <tr>
+                  <th>标的</th>
+                  <th>状态</th>
+                  <th className="number">评分</th>
+                  <th className="number">价格</th>
+                  <th className="number">5分钟</th>
+                  <th className="number">量比</th>
+                  <th>板块</th>
+                  <th>关键原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {symbols.length === 0 ? (
+                  <tr>
+                    <td className="stock-empty-row" colSpan="8">{loading ? '正在扫描' : '暂无盘中分析'}</td>
+                  </tr>
+                ) : symbols.map((symbol) => (
+                  <IntradaySymbolRow key={symbol.symbol} symbol={symbol} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <div className="premarket-empty">还没有盘中分析，点击运行盘中 Agent 生成。</div>
+      )}
+    </section>
+  );
+}
+
+function IntradaySymbolRow({ symbol }) {
+  return (
+    <tr>
+      <td><strong>{symbol.symbol}</strong></td>
+      <td><span className={`intraday-status status-${symbol.status}`}>{statusLabel(symbol.status)}</span></td>
+      <td className="number">{formatScore(symbol.score)}</td>
+      <td className="number">{formatPrice(symbol.last_price)}</td>
+      <td className="number">{formatPercentValue(symbol.features?.return_5m)}</td>
+      <td className="number">{formatPlain(symbol.features?.volume_ratio_5m)}</td>
+      <td>{symbol.features?.primary_theme || '-'}</td>
+      <td className="intraday-reason">{symbol.reasons?.[0] || '-'}</td>
+    </tr>
+  );
+}
+
+function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefresh }) {
+  const metricSummary = useMemo(() => summarizeMetrics(data.metrics), [data.metrics]);
+  const latestEvents = data.events.slice(0, 8);
+  const latestTraces = data.traces.slice(-8).reverse();
+  const knowledgeResults = data.knowledgeResults.slice(0, 6);
+  const premarketRag = data.premarketRag || {};
+  const evidencePayload = premarketRag.evidence?.payload || {};
+  const evaluationPayload = premarketRag.evaluation?.payload || {};
+  const packs = evidencePayload.packs || [];
+  const evaluationSummary = evaluationPayload.summary || {};
+  const citationItems = packs.flatMap((pack) => (
+    (pack.items || []).map((item) => ({ ...item, section: pack.section }))
+  )).slice(0, 5);
+  return (
+    <section className="observability-panel">
+      <div className="observability-header">
+        <div className="section-title">
+          <GitBranch size={18} />
+          <span>可观测性与 RAG</span>
+        </div>
+        <div className="observability-actions">
+          <label className="knowledge-search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="检索证据，如 机器人 / 半导体"
+            />
+          </label>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新观测数据">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      {error ? <div className="market-error">{error}</div> : null}
+      <div className="observability-grid">
+        <div className="observability-card">
+          <h2>Event Stream</h2>
+          <ul className="trace-list">
+            {latestEvents.length === 0 ? <li>暂无事件</li> : latestEvents.map((event) => (
+              <li key={event.event_id}>
+                <strong>{event.topic}</strong>
+                <span>{event.producer} · {event.run_id || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card">
+          <h2>Trace Timeline</h2>
+          <ul className="trace-list">
+            {latestTraces.length === 0 ? <li>暂无 trace</li> : latestTraces.map((trace) => (
+              <li key={trace.trace_id}>
+                <strong className={`trace-${trace.status}`}>{trace.step}</strong>
+                <span>{trace.agent} · {formatMs(trace.duration_ms)} · {trace.decision_summary || trace.status}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card">
+          <h2>Metrics</h2>
+          <div className="metric-mini-grid">
+            {metricSummary.map((item) => (
+              <div key={item.name}>
+                <span>{item.name}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="observability-card">
+          <h2>RAG Search</h2>
+          <ul className="trace-list">
+            {knowledgeResults.length === 0 ? <li>暂无检索结果</li> : knowledgeResults.map((item) => (
+              <li key={item.record.record_id}>
+                <strong>{item.record.title}</strong>
+                <span>{item.record.source || item.record.source_rank} · score {Number(item.score).toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card rag-pack-card">
+          <h2>Evidence Packs</h2>
+          <div className="rag-pack-strip">
+            <span>{evidencePayload.pack_count || packs.length || 0} packs</span>
+            <span>覆盖 {formatPercentNumber(evaluationSummary.avg_evidence_coverage_ratio)}</span>
+            <span>引用 {formatPercentNumber(evaluationSummary.avg_citation_coverage_ratio)}</span>
+            <span>{evidencePayload.token_estimate || evaluationSummary.token_count || 0} tokens</span>
+          </div>
+          <ul className="trace-list">
+            {packs.length === 0 ? <li>暂无 evidence pack</li> : packs.slice(0, 6).map((pack) => (
+              <li key={pack.pack_id || pack.section}>
+                <strong>{sectionLabel(pack.section)} · {(pack.items || []).length} 条</strong>
+                <span>
+                  dup {pack.dropped_duplicates || 0} · token {pack.token_estimate || 0} · hit {pack.coverage?.evidence_count || 0}/{pack.coverage?.result_count || 0}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="observability-card rag-pack-card">
+          <h2>Citations</h2>
+          <div className="rag-pack-strip">
+            <span>来源均值 {formatScore(evaluationSummary.avg_source_rank)}</span>
+            <span>重复 {formatPercentNumber(evaluationSummary.avg_duplicate_ratio)}</span>
+          </div>
+          <ul className="trace-list rag-citation-list">
+            {citationItems.length === 0 ? <li>暂无 citation</li> : citationItems.map((item) => (
+              <li key={`${item.section}-${item.evidence_id}`}>
+                <strong>{item.citation_label || `[${item.evidence_id}]`} {item.title}</strong>
+                <span>{sectionLabel(item.section)} · source {formatScore(item.source_rank)} · {item.source || item.source_type}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DecisionOpsPanel({ data, loading, decisionQuery, onDecisionQueryChange, onRefresh }) {
+  const context = data.premarketContext;
+  const constraints = context?.constraints || [];
+  const approvals = data.approvalQueue || [];
+  const timeline = data.decisionTimeline || [];
+  const ragDebug = data.ragDebug;
+  return (
+    <section className="decision-panel">
+      <div className="decision-header">
+        <div className="section-title">
+          <ShieldCheck size={18} />
+          <span>决策与约束</span>
+        </div>
+        <div className="decision-actions">
+          <label className="decision-search">
+            <Search size={16} />
+            <input
+              value={decisionQuery}
+              onChange={(event) => onDecisionQueryChange(event.target.value)}
+              placeholder="按 intent_id 过滤 timeline"
+            />
+          </label>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新决策数据">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="decision-grid">
+        <div className="decision-card">
+          <h2>Premarket Context</h2>
+          {context ? (
+            <>
+              <div className="context-strip">
+                <span>{viewLabel(context.market_view)}</span>
+                <span>确认 {context.confirmed_themes?.length || 0}</span>
+                <span>失败 {context.failed_themes?.length || 0}</span>
+              </div>
+              <ul className="trace-list">
+                {constraints.length === 0 ? <li>暂无盘前约束</li> : constraints.slice(0, 5).map((item) => (
+                  <li key={`${item.instruction_type}-${item.target}-${item.reason}`}>
+                    <strong>{item.instruction_type} · {item.target}</strong>
+                    <span>{item.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <div className="panel-empty">暂无盘前上下文</div>
+          )}
+        </div>
+        <div className="decision-card">
+          <h2>Approval Queue</h2>
+          <ul className="trace-list">
+            {approvals.length === 0 ? <li>暂无人工审批项</li> : approvals.slice(0, 6).map((item) => (
+              <li key={item.event_id || item.decision?.decision_id}>
+                <strong>{item.intent?.symbol || '-'} · {item.decision?.decision || '-'}</strong>
+                <span>{item.decision?.reason || item.premarket?.matched_instruction_types?.join(', ') || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="decision-card">
+          <h2>Decision Timeline</h2>
+          <ul className="trace-list">
+            {timeline.length === 0 ? <li>暂无决策事件</li> : timeline.slice(0, 6).map((item) => (
+              <li key={item.event_id}>
+                <strong>{item.topic}</strong>
+                <span>{item.intent_id || '-'} · {item.producer} · {formatDateTime(item.created_at)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="decision-card">
+          <h2>RAG Debug</h2>
+          <div className="context-strip">
+            <span>{ragDebug?.result_count || 0} 条</span>
+            <span>{ragDebug?.query?.q || '-'}</span>
+          </div>
+          <ul className="trace-list">
+            {(ragDebug?.results || []).length === 0 ? <li>暂无证据</li> : ragDebug.results.slice(0, 5).map((item) => (
+              <li key={item.record.record_id}>
+                <strong>{item.record.title}</strong>
+                <span>{item.record.source_rank} · {item.record.themes?.join(', ') || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </section>
   );
 }
@@ -796,7 +1281,22 @@ function formatRatio(value) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function formatPercentValue(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function formatPercentNumber(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  return `${(Number(value) * 100).toFixed(0)}%`;
+}
+
 function formatPlain(value) {
+  if (value === null || value === undefined) return '-';
+  return Number(value).toFixed(2);
+}
+
+function formatScore(value) {
   if (value === null || value === undefined) return '-';
   return Number(value).toFixed(2);
 }
@@ -837,7 +1337,10 @@ function OutputView({ result, running, elapsed }) {
 }
 
 function buildSummary(results) {
-  const intent = Array.isArray(results.intraday?.parsed) ? results.intraday.parsed[0] : null;
+  const intradayParsed = results.intraday?.parsed;
+  const intent = Array.isArray(intradayParsed)
+    ? intradayParsed[0]
+    : intradayParsed?.intents?.[0] || intradayParsed?.analysis?.generated_intents?.[0] || null;
   const risk = results.risk?.parsed;
   const brokerFill = Array.isArray(results.broker?.parsed) ? results.broker.parsed[0] : null;
   const review = results.review?.parsed;
@@ -847,6 +1350,51 @@ function buildSummary(results) {
     { label: '模拟成交', value: brokerFill ? `${brokerFill.quantity}@${Number(brokerFill.price).toFixed(3)}` : '-' },
     { label: '复盘净收益', value: review?.pnl ? Number(review.pnl.net_pnl).toFixed(2) : '-' },
   ];
+}
+
+function statusLabel(value) {
+  return {
+    tradable: '可交易',
+    watch: '观察',
+    blocked: '受限',
+    no_signal: '无信号',
+  }[value] || value || '-';
+}
+
+function sectionLabel(value) {
+  return {
+    core_conclusion: '核心结论',
+    post_close_events: '盘后事件',
+    announcement_events: '公告',
+    portfolio_risks: '持仓风险',
+    theme_candidates: '题材候选',
+    macro_calendar: '宏观日历',
+    overseas_mapping: '海外映射',
+    avoid_list: '回避清单',
+    opening_radar: '竞价雷达',
+    premarket_instructions: '盘前指令',
+  }[value] || value || '-';
+}
+
+function summarizeMetrics(metrics) {
+  const totals = new Map();
+  for (const metric of metrics) {
+    const current = totals.get(metric.name) || 0;
+    totals.set(metric.name, current + Number(metric.value || 0));
+  }
+  const preferred = ['agent_run_total', 'data_source_fetch_total', 'rag_qdrant_index_records_total', 'rag_evidence_coverage_ratio'];
+  const rows = preferred
+    .filter((name) => totals.has(name))
+    .map((name) => ({
+      name,
+      value: name.endsWith('_ms')
+        ? formatMs(totals.get(name))
+        : name.endsWith('_ratio')
+          ? formatPercentNumber(totals.get(name))
+          : totals.get(name).toFixed(0),
+    }));
+  if (rows.length > 0) return rows;
+  return [{ name: 'metrics', value: String(metrics.length) }];
 }
 
 createRoot(document.getElementById('root')).render(<App />);

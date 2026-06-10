@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from trading_agent_system.agents.intel_agent import IntelAgent
 from trading_agent_system.agents.intraday_agent import IntradayAgent
 from trading_agent_system.core.audit import AuditLedger
 from trading_agent_system.core.config import load_yaml_config
-from trading_agent_system.core.event_bus import MemoryEventBus
+from trading_agent_system.core.event_bus import DurableEventBus
+from trading_agent_system.core.premarket import PremarketContextLoader
+from trading_agent_system.core.storage import JsonlEventRepository
 from trading_agent_system.core.strategy_registry import StrategyRegistry
 from trading_agent_system.schemas import AccountSnapshot, MarketBar, PositionSnapshot
 
@@ -41,16 +44,19 @@ def main() -> None:
 
     app_config = load_yaml_config(args.config)
     strategy_config = load_yaml_config(app_config["configs"]["strategy_registry"])
-    bus = MemoryEventBus()
+    event_store = Path(app_config["paths"].get("event_store", "data/events"))
+    bus = DurableEventBus(JsonlEventRepository(event_store))
     audit = AuditLedger(app_config["paths"]["audit_log"])
     registry = StrategyRegistry.from_config(strategy_config)
     watchlist = app_config["watchlist"]
+    premarket_context = PremarketContextLoader(Path("reports/premarket")).load_latest()
     agent = IntradayAgent(
         watchlist=watchlist,
         strategy_registry=registry,
         event_bus=bus,
         audit=audit,
         max_market_data_delay_ms=app_config["market"]["max_market_data_delay_ms"],
+        premarket_context=premarket_context,
     )
     if args.demo:
         intel = IntelAgent(bus, audit)
@@ -71,7 +77,18 @@ def main() -> None:
         for bar in build_demo_bars(watchlist[0]):
             agent.ingest_bar(bar, delay_ms=0)
         intents = agent.scan()
-        print(json.dumps([intent.model_dump(mode="json") for intent in intents], ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "intents": [intent.model_dump(mode="json") for intent in intents],
+                    "analysis": agent.latest_analysis_report.model_dump(mode="json")
+                    if agent.latest_analysis_report
+                    else None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
         print("IntradayAgent initialized. Use --demo for a local smoke run.")
 

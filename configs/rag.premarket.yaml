@@ -1,0 +1,75 @@
+rag:
+  enabled: true
+  timezone: Asia/Shanghai
+
+  vector_store:
+    backend: qdrant
+    mode: local
+    path: data/qdrant
+    collection_hot: premarket_hot
+    collection_warm: premarket_warm
+
+  embedding:
+    provider: deterministic
+    dimension: 384
+
+  retrieval:
+    default_top_k_per_retriever: 30
+    default_final_top_k: 10
+    metadata_filter_first: true
+    require_premarket_window_filter: true
+    allow_cross_window_history_for_theme: true
+
+  retriever_weights:
+    structured: 1.4
+    risk_event: 1.5
+    portfolio: 1.6
+    keyword: 1.2
+    vector: 1.0
+    theme: 1.1
+    recency: 1.0
+
+  business_weights:
+    source_rank: 0.20
+    importance: 0.20
+    recency: 0.15
+    portfolio: 0.20
+    watchlist: 0.10
+    theme_continuity: 0.10
+    verification: 0.05
+
+  penalties:
+    rumor: 0.35
+    unverified: 0.25
+    duplicate: 0.20
+    stale: 0.15
+    social_only: 0.40
+
+  diversity:
+    max_per_event_cluster: 1
+    max_per_symbol_per_section: 3
+    max_per_theme_per_section: 5
+    max_news_reposts_per_cluster: 1
+
+  context_budget:
+    total_max_tokens: 12000
+    sections:
+      core_conclusion: 1800
+      post_close_events: 2600
+      portfolio_risks: 2200
+      theme_candidates: 2200
+      macro_calendar: 1200
+      overseas_mapping: 1200
+      avoid_list: 1600
+
+  safety:
+    block_social_as_candidate: true
+    require_evidence_for_every_claim: true
+    forbid_trade_words_in_instruction: true
+    no_evidence_no_claim: true
+
+  cache:
+    enabled: true
+    ttl_seconds: 300
+    invalidate_on_s_or_a_event: true
+    invalidate_on_holding_event: true

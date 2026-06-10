@@ -14,9 +14,13 @@ from trading_agent_system.agents.premarket_agent.news_provider import (
     RssNewsProvider,
     SinaFinanceRollProvider,
 )
+from trading_agent_system.agents.premarket_agent.rag.rag_service import PreMarketRAGService
 from trading_agent_system.core.audit import AuditLedger
 from trading_agent_system.core.config import load_yaml_config
-from trading_agent_system.core.event_bus import MemoryEventBus
+from trading_agent_system.core.event_bus import DurableEventBus
+from trading_agent_system.core.knowledge import KnowledgeStore, RagIndexer
+from trading_agent_system.core.observability import MetricsRecorder, TraceLogger
+from trading_agent_system.core.storage import JsonlEventRepository
 from trading_agent_system.agents.premarket_agent.trading_calendar import TradingCalendarService
 
 
@@ -34,7 +38,19 @@ def main() -> None:
     calendar_config = load_calendar_config(app_config)
     calendar = TradingCalendarService.from_config(calendar_config)
     audit = AuditLedger(app_config["paths"]["audit_log"])
-    agent = PremarketAgent(event_bus=MemoryEventBus(), audit=audit, providers=providers, calendar=calendar)
+    event_repository = JsonlEventRepository()
+    knowledge_store = KnowledgeStore()
+    premarket_rag_service = build_rag_service(app_config)
+    agent = PremarketAgent(
+        event_bus=DurableEventBus(repository=event_repository),
+        audit=audit,
+        providers=providers,
+        calendar=calendar,
+        trace_logger=TraceLogger(),
+        metrics=MetricsRecorder(),
+        knowledge_indexer=RagIndexer(knowledge_store),
+        premarket_rag_service=premarket_rag_service,
+    )
     report = agent.run(report_date=report_date, limit_per_source=args.limit)
     write_report(report, app_config)
     print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
@@ -77,6 +93,15 @@ def load_calendar_config(app_config: dict[str, object]) -> dict[str, object]:
         return load_yaml_config(str(premarket_path))
     premarket = app_config.get("premarket", {})
     return premarket if isinstance(premarket, dict) else {}
+
+
+def build_rag_service(app_config: dict[str, object]) -> PreMarketRAGService | None:
+    configs = app_config.get("configs", {})
+    rag_path = configs.get("rag_premarket") if isinstance(configs, dict) else None
+    path = Path(str(rag_path or "configs/rag.premarket.yaml"))
+    if not path.exists():
+        return None
+    return PreMarketRAGService.from_config(load_yaml_config(path))
 
 
 def write_report(report: object, app_config: dict[str, object]) -> None:

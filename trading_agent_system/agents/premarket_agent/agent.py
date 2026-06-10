@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 from hashlib import sha256
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from trading_agent_system.core.audit import AuditLedger
 from trading_agent_system.core.event_bus import MemoryEventBus
+from trading_agent_system.core.knowledge import RagIndexer
+from trading_agent_system.core.observability import MetricsRecorder, TraceLogger
+from trading_agent_system.core.reference import ThemeRegistry
 from trading_agent_system.schemas import (
     PremarketCatalyst,
     PremarketNewsItem,
@@ -18,6 +22,8 @@ from trading_agent_system.schemas import (
 
 from .builders import RiskFilter, ScenarioBuilder, ThemeDetector
 from .pipeline import EventClusterer, EventScorer
+from .rag.evaluation import RAGEvaluator
+from .rag.rag_service import PreMarketRAGService
 from .schemas import (
     Actionability,
     AuctionSignal,
@@ -68,6 +74,51 @@ SYMBOL_KEYWORDS: dict[str, str] = {
 }
 
 
+def _premarket_window_id(window: PreMarketWindow) -> str:
+    return f"pmw_{window.trading_day.isoformat()}"
+
+
+def _evidence_ids_from_packs(packs: list[dict[str, object]]) -> list[str]:
+    seen: set[str] = set()
+    evidence_ids: list[str] = []
+    for pack in packs:
+        items = pack.get("items", [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and item.get("evidence_id"):
+                evidence_id = str(item["evidence_id"])
+                if evidence_id in seen:
+                    continue
+                seen.add(evidence_id)
+                evidence_ids.append(evidence_id)
+    return evidence_ids
+
+
+def _unique_strings(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    values: list[str] = []
+    for group in groups:
+        for value in group:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+    return values
+
+
+def _instruction_refs(
+    brief: MorningBrief,
+    radar: OpeningRadar,
+    *event_id_groups: list[str],
+) -> tuple[list[str], list[str]]:
+    evidence_event_ids = _unique_strings(*event_id_groups)
+    source_ids = _unique_strings(brief.source_ids, radar.source_ids)
+    if not evidence_event_ids and not source_ids:
+        source_ids = ["system"]
+    return evidence_event_ids, source_ids
+
+
 class PremarketAgent:
     def __init__(
         self,
@@ -75,24 +126,48 @@ class PremarketAgent:
         audit: AuditLedger,
         providers: list[object],
         calendar: TradingCalendarService | None = None,
+        trace_logger: TraceLogger | None = None,
+        metrics: MetricsRecorder | None = None,
+        knowledge_indexer: RagIndexer | None = None,
+        premarket_rag_service: PreMarketRAGService | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.audit = audit
         self.providers = providers
         self.calendar = calendar or TradingCalendarService()
+        self.trace_logger = trace_logger
+        self.metrics = metrics
+        self.knowledge_indexer = knowledge_indexer
+        self.premarket_rag_service = premarket_rag_service
         self.scorer = EventScorer()
         self.clusterer = EventClusterer()
         self.theme_detector = ThemeDetector()
         self.risk_filter = RiskFilter()
         self.scenario_builder = ScenarioBuilder()
+        self.theme_registry = ThemeRegistry.default()
 
     def run(self, report_date: date, limit_per_source: int = 30) -> PremarketReport:
+        run_id = make_id("pmrun")
+        started = perf_counter()
         window = self.calendar.build_window(report_date)
         self.audit.write("premarket_window_built", window)
+        self._trace(
+            run_id=run_id,
+            step="build_window",
+            status="success",
+            output_refs=[window.trading_day.isoformat()],
+            decision_summary=f"{window.window_start.isoformat()} -> {window.auction_end.isoformat()}",
+        )
         collected: list[PremarketNewsItem] = []
         statuses: list[PremarketSourceStatus] = []
         for provider in self.providers:
             result = provider.fetch(limit=limit_per_source)
+            self._metric(
+                "data_source_fetch_total",
+                1,
+                tags={"agent": "premarket", "source": result.source, "status": result.status},
+                run_id=run_id,
+            )
             self.audit.write(
                 "premarket_provider_fetched",
                 {
@@ -112,10 +187,26 @@ class PremarketAgent:
             )
 
         collected = self._dedupe(collected)
+        self._trace(
+            run_id=run_id,
+            step="collect_sources",
+            status="success",
+            output_refs=[item.item_id for item in collected[:20]],
+            decision_summary=f"collected={len(collected)}, sources={len(statuses)}",
+        )
         raw_documents = self._to_raw_documents(collected)
         events = self._to_events(collected, raw_documents, window)
         clusters = self.clusterer.cluster(events)
         self.audit.write("premarket_event_clusters_created", {"count": len(clusters)})
+        self._trace(
+            run_id=run_id,
+            step="normalize_and_cluster",
+            status="success",
+            input_refs=[document.source_id for document in raw_documents[:20]],
+            output_refs=[cluster.cluster_id for cluster in clusters[:20]],
+            evidence_ids=[event.event_id for event in events[:20]],
+            decision_summary=f"events={len(events)}, clusters={len(clusters)}",
+        )
         theme_seeds = self.theme_detector.detect(clusters)
         avoid_candidates = self.risk_filter.build_avoid_candidates(clusters)
         scenarios = self.scenario_builder.build(window, theme_seeds, avoid_candidates)
@@ -147,20 +238,167 @@ class PremarketAgent:
             instruction=instruction.model_dump(mode="json"),
         )
         report = report.model_copy(update={"markdown_report": render_premarket_markdown(report)})
-        self.event_bus.publish("premarket.raw_documents", [document.model_dump(mode="json") for document in raw_documents])
-        self.event_bus.publish("premarket.normalized_events", [event.model_dump(mode="json") for event in events])
-        self.event_bus.publish("premarket.event_clusters", [cluster.model_dump(mode="json") for cluster in clusters])
-        self.event_bus.publish("premarket.post_close_digest", post_close_digest.model_dump(mode="json"))
-        self.event_bus.publish("premarket.morning_brief", morning_brief.model_dump(mode="json"))
-        self.event_bus.publish("premarket.opening_radar", opening_radar.model_dump(mode="json"))
-        self.event_bus.publish("premarket.instructions", instruction.model_dump(mode="json"))
-        self.event_bus.publish("premarket.reports", report)
+        raw_document_payloads = [document.model_dump(mode="json") for document in raw_documents]
+        event_payloads = [event.model_dump(mode="json") for event in events]
+        cluster_payloads = [cluster.model_dump(mode="json") for cluster in clusters]
+        morning_brief_payload = morning_brief.model_dump(mode="json")
+        instruction_payload = instruction.model_dump(mode="json")
+        indexed_count = 0
+        rag_pack_payloads: list[dict[str, object]] = []
+        rag_evaluation_payload: dict[str, object] | None = None
+        if self.knowledge_indexer is not None:
+            records = self.knowledge_indexer.index_premarket_payload(
+                trading_day=window.trading_day,
+                raw_documents=raw_document_payloads,
+                events=event_payloads,
+                clusters=cluster_payloads,
+                morning_brief=morning_brief_payload,
+                instruction=instruction_payload,
+            )
+            indexed_count = len(records)
+            self._metric("rag_index_records_total", indexed_count, tags={"agent": "premarket"}, run_id=run_id)
+        if self.premarket_rag_service is not None:
+            rag_documents = self.premarket_rag_service.index_payloads(
+                trading_day=window.trading_day,
+                premarket_window_id=_premarket_window_id(window),
+                raw_documents=raw_document_payloads,
+                events=event_payloads,
+                clusters=cluster_payloads,
+            )
+            packs = self.premarket_rag_service.retrieve_all_evidence_packs(
+                window.trading_day,
+                _premarket_window_id(window),
+            )
+            evaluator = RAGEvaluator()
+            evaluation_metrics = evaluator.evaluate_packs(packs)
+            evaluation_summary = evaluator.summarize(evaluation_metrics)
+            rag_pack_payloads = [pack.model_dump(mode="json") for pack in packs]
+            rag_evaluation_payload = {
+                "trading_day": window.trading_day.isoformat(),
+                "premarket_window_id": _premarket_window_id(window),
+                "metrics": [metric.model_dump(mode="json") for metric in evaluation_metrics],
+                "summary": evaluation_summary,
+            }
+            self._metric("rag_qdrant_index_records_total", len(rag_documents), tags={"agent": "premarket"}, run_id=run_id)
+            self._metric(
+                "rag_evidence_token_estimate",
+                sum(pack.token_estimate for pack in packs),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
+            self._metric(
+                "rag_evidence_coverage_ratio",
+                float(evaluation_summary["avg_evidence_coverage_ratio"]),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
+            self._metric(
+                "rag_duplicate_ratio",
+                float(evaluation_summary["avg_duplicate_ratio"]),
+                tags={"agent": "premarket"},
+                run_id=run_id,
+            )
+        self._trace(
+            run_id=run_id,
+            step="build_outputs",
+            status="success",
+            output_refs=[post_close_digest.digest_id, morning_brief.brief_id, opening_radar.radar_id, instruction.instruction_id],
+            evidence_ids=[event.event_id for event in events[:20]],
+            decision_summary=f"themes={len(theme_seeds)}, avoid={len(avoid_candidates)}, indexed={indexed_count}",
+        )
+        self._publish("premarket.raw_documents", raw_document_payloads, window, run_id)
+        self._publish("premarket.normalized_events", event_payloads, window, run_id, [event.event_id for event in events])
+        self._publish("premarket.event_clusters", cluster_payloads, window, run_id, [cluster.cluster_id for cluster in clusters])
+        self._publish("premarket.post_close_digest", post_close_digest.model_dump(mode="json"), window, run_id, post_close_digest.source_ids)
+        self._publish("premarket.morning_brief", morning_brief_payload, window, run_id, morning_brief.source_ids)
+        self._publish("premarket.opening_radar", opening_radar.model_dump(mode="json"), window, run_id, opening_radar.source_ids)
+        self._publish("premarket.instructions", instruction_payload, window, run_id, instruction.source_ids)
+        if rag_pack_payloads:
+            rag_evidence_event = {
+                "trading_day": window.trading_day.isoformat(),
+                "premarket_window_id": _premarket_window_id(window),
+                "pack_count": len(rag_pack_payloads),
+                "token_estimate": sum(int(pack.get("token_estimate") or 0) for pack in rag_pack_payloads),
+                "packs": rag_pack_payloads,
+            }
+            self._publish(
+                "premarket.rag_evidence_packs",
+                rag_evidence_event,
+                window,
+                run_id,
+                _evidence_ids_from_packs(rag_pack_payloads),
+            )
+        if rag_evaluation_payload is not None:
+            self._publish(
+                "premarket.rag_evaluation",
+                rag_evaluation_payload,
+                window,
+                run_id,
+                _evidence_ids_from_packs(rag_pack_payloads),
+            )
+        self._publish("premarket.reports", report, window, run_id, morning_brief.source_ids)
+        self._metric("agent_run_total", 1, tags={"agent": "premarket", "status": "success"}, run_id=run_id)
+        self._metric(
+            "agent_run_duration_ms",
+            int((perf_counter() - started) * 1000),
+            tags={"agent": "premarket"},
+            run_id=run_id,
+        )
         self.audit.write("premarket_post_close_digest_created", post_close_digest)
         self.audit.write("premarket_morning_brief_created", morning_brief)
         self.audit.write("premarket_opening_radar_created", opening_radar)
         self.audit.write("premarket_instruction_created", instruction)
         self.audit.write("premarket_report_created", report)
         return report
+
+    def _publish(
+        self,
+        topic: str,
+        event: object,
+        window: PreMarketWindow,
+        run_id: str,
+        evidence_ids: list[str] | None = None,
+    ) -> None:
+        self.event_bus.publish(
+            topic,
+            event,
+            producer="premarket_agent",
+            trading_day=window.trading_day,
+            run_id=run_id,
+            correlation_id=run_id,
+            evidence_ids=evidence_ids,
+        )
+
+    def _trace(
+        self,
+        *,
+        run_id: str,
+        step: str,
+        status: str,
+        input_refs: list[str] | None = None,
+        output_refs: list[str] | None = None,
+        evidence_ids: list[str] | None = None,
+        decision_summary: str = "",
+        error: str | None = None,
+    ) -> None:
+        if self.trace_logger is None:
+            return
+        self.trace_logger.record(
+            agent="premarket_agent",
+            step=step,
+            run_id=run_id,
+            status=status,
+            input_refs=input_refs,
+            output_refs=output_refs,
+            evidence_ids=evidence_ids,
+            decision_summary=decision_summary,
+            error=error,
+        )
+
+    def _metric(self, name: str, value: float, *, tags: dict[str, str], run_id: str) -> None:
+        if self.metrics is None:
+            return
+        self.metrics.record(name, value, tags=tags, run_id=run_id)
 
     def _filter_window(
         self,
@@ -438,52 +676,73 @@ class PremarketAgent:
     ) -> PreMarketInstruction:
         items: list[PreMarketInstructionItem] = []
         for plan in watchlist[:12]:
+            evidence_event_ids, source_ids = _instruction_refs(brief, radar, brief.top_event_ids[:5])
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.WATCH_OPENING_AUCTION,
                     target=plan.symbol,
                     reason=plan.reason,
-                    evidence_event_ids=brief.top_event_ids[:5],
-                    source_ids=brief.source_ids,
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=bool(plan.risk_flags),
                 )
             )
         for plan in avoid_list[:12]:
+            evidence_event_ids, source_ids = _instruction_refs(
+                brief,
+                radar,
+                brief.risk_event_ids[:5],
+                brief.top_event_ids[:5],
+            )
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.AVOID_NEW_ENTRY,
                     target=plan.symbol,
                     reason=plan.reason,
-                    evidence_event_ids=brief.risk_event_ids[:5] or brief.top_event_ids[:5],
-                    source_ids=brief.source_ids,
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=True,
                 )
             )
         if warnings:
+            evidence_event_ids, source_ids = _instruction_refs(brief, radar)
             items.append(
                 PreMarketInstructionItem(
                     instruction_type=InstructionType.REQUIRE_CONFIRMATION,
                     target="ALL",
                     reason="盘前消息源或竞价确认不足，开盘前需要人工确认。",
-                    source_ids=brief.source_ids or radar.source_ids or ["system"],
+                    evidence_event_ids=evidence_event_ids,
+                    source_ids=source_ids,
                     expires_at=window.continuous_open,
                     requires_manual_review=True,
                 )
             )
+        source_ids = _unique_strings(brief.source_ids, radar.source_ids, *[item.source_ids for item in items])
         return PreMarketInstruction(
             instruction_id=make_id("pmins"),
             trading_day=window.trading_day,
             generated_at=datetime.now(CHINA_TZ),
             items=items,
-            source_ids=brief.source_ids,
+            source_ids=source_ids,
             warnings=[*warnings, *radar.warnings],
         )
 
     def _enrich(self, item: PremarketNewsItem) -> PremarketNewsItem:
         text = f"{item.title} {item.summary}"
-        sectors = sorted(set(item.sectors) | {sector for sector, words in SECTOR_KEYWORDS.items() if any(word in text for word in words)})
+        registry_themes = {
+            theme
+            for keyword, theme in self.theme_registry.aliases.items()
+            if keyword in text and self.theme_registry.resolve_theme(theme)
+        }
+        direct_registry_themes = {theme for theme in self.theme_registry.theme_symbols if theme in text}
+        sectors = sorted(
+            set(item.sectors)
+            | {sector for sector, words in SECTOR_KEYWORDS.items() if any(word in text for word in words)}
+            | registry_themes
+            | direct_registry_themes
+        )
         symbols = sorted(set(item.symbols) | {symbol for name, symbol in SYMBOL_KEYWORDS.items() if name in text})
         category = item.category
         if any(word in text for word in OFFICIAL_WORDS):
