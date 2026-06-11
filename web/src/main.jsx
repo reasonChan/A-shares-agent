@@ -20,7 +20,6 @@ import {
   TrendingDown,
   TrendingUp,
   Terminal,
-  Wallet,
 } from 'lucide-react';
 import {
   fetchObservabilityEvents,
@@ -42,15 +41,16 @@ import {
   runJob,
 } from './api.js';
 import AgentArchitecturePage from './AgentArchitecturePage.jsx';
+import {
+  CONSOLE_SECTIONS,
+  PIPELINE_NODES,
+  buildKnowledgeCards,
+  buildOpsAuditCards,
+  buildPipelineNodes,
+} from './consoleInformationArchitecture.js';
 import './styles.css';
 
-const JOBS = [
-  { id: 'premarket', label: '盘前 Agent', hint: 'Ctrl+5', icon: Newspaper },
-  { id: 'intraday', label: '盘中 Agent', hint: 'Ctrl+1', icon: Activity },
-  { id: 'risk', label: '风控网关', hint: 'Ctrl+2', icon: ShieldCheck },
-  { id: 'broker', label: 'Paper Broker', hint: 'Ctrl+3', icon: Wallet },
-  { id: 'review', label: '复盘 Agent', hint: 'Ctrl+4', icon: FileText },
-];
+const JOB_LABELS = Object.fromEntries(PIPELINE_NODES.map((item) => [item.id, item.title]));
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -298,7 +298,7 @@ function App() {
         ...current,
         [job]: {
           job,
-          label: JOBS.find((item) => item.id === job)?.label || job,
+          label: JOB_LABELS[job] || job,
           status: 'failed',
           elapsed_ms: Math.round(performance.now() - startedAtRef.current[job]),
           stdout: '',
@@ -383,6 +383,20 @@ function App() {
 
   const activeResult = selectedJob === 'all' ? results.all : results[selectedJob];
   const summary = useMemo(() => buildSummary(results), [results]);
+  const pipelineNodes = useMemo(() => buildPipelineNodes({
+    results,
+    running,
+    timers,
+    premarket,
+    intraday,
+  }), [intraday, premarket, results, running, timers]);
+  const knowledgeCards = useMemo(() => buildKnowledgeCards({
+    observability,
+  }), [observability]);
+  const opsAuditCards = useMemo(() => buildOpsAuditCards({
+    observability,
+    reports,
+  }), [observability, reports]);
 
   return (
     <main className="app-shell">
@@ -426,6 +440,23 @@ function App() {
             <Metric icon={AlertTriangle} label="人工确认" value="开启" tone="orange" />
             <Metric icon={Clock} label="最近耗时" value={formatMs(activeResult?.elapsed_ms || timers[selectedJob] || 0)} tone="gray" />
           </section>
+
+          <TradingPipelineSection
+            title={CONSOLE_SECTIONS.pipeline}
+            nodes={pipelineNodes}
+            selectedJob={selectedJob}
+            activeResult={activeResult}
+            running={running}
+            timers={timers}
+            reports={reports}
+            selectedReport={selectedReport}
+            reportText={reportText}
+            onSelectJob={setSelectedJob}
+            onRunJob={executeJob}
+            onRunAll={executeAll}
+            onSelectReport={setSelectedReport}
+            onRefreshReports={refreshReports}
+          />
 
           <PremarketPanel
             report={premarket}
@@ -477,7 +508,9 @@ function App() {
             onRun={() => executeJob('intraday')}
           />
 
-          <ObservabilityPanel
+          <PremarketKnowledgeSection
+            title={CONSOLE_SECTIONS.knowledge}
+            cards={knowledgeCards}
             data={observability}
             loading={observabilityLoading}
             error={observabilityError}
@@ -486,68 +519,15 @@ function App() {
             onRefresh={refreshObservability}
           />
 
-          <DecisionOpsPanel
+          <OperationsAuditSection
+            title={CONSOLE_SECTIONS.ops}
+            cards={opsAuditCards}
             data={observability}
             loading={observabilityLoading}
             decisionQuery={decisionQuery}
             onDecisionQueryChange={setDecisionQuery}
             onRefresh={refreshObservability}
           />
-
-          <section className="workspace">
-            <div className="control-panel">
-              <div className="section-title">
-                <BarChart3 size={18} />
-                <span>运行</span>
-              </div>
-              <button className="run-all" type="button" onClick={executeAll} disabled={running.all}>
-                {running.all ? <RefreshCw className="spin" size={18} /> : <Play size={18} />}
-                <span>运行完整链路</span>
-                <kbd>Ctrl Enter</kbd>
-              </button>
-              <div className="job-list">
-                {JOBS.map((job) => (
-                  <JobButton
-                    key={job.id}
-                    job={job}
-                    selected={selectedJob === job.id}
-                    running={Boolean(running[job.id])}
-                    elapsed={running[job.id] ? timers[job.id] : results[job.id]?.elapsed_ms}
-                    status={results[job.id]?.status}
-                    onSelect={() => setSelectedJob(job.id)}
-                    onRun={() => executeJob(job.id)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="output-panel">
-              <div className="section-title">
-                <Terminal size={18} />
-                <span>输出</span>
-              </div>
-              <OutputView result={activeResult} running={Boolean(running[selectedJob])} elapsed={timers[selectedJob]} />
-            </div>
-
-            <div className="report-panel">
-              <div className="section-title">
-                <FileText size={18} />
-                <span>日报</span>
-              </div>
-              <div className="report-select-row">
-                <select value={selectedReport} onChange={(event) => setSelectedReport(event.target.value)}>
-                  <option value="">无报告</option>
-                  {reports.map((report) => (
-                    <option key={report.name} value={report.name}>{report.name}</option>
-                  ))}
-                </select>
-                <button className="icon-button" type="button" onClick={refreshReports} aria-label="刷新报告">
-                  <RefreshCw size={16} />
-                </button>
-              </div>
-              <pre className="report-preview">{reportText || '暂无报告'}</pre>
-            </div>
-          </section>
 
           <section className="summary-strip">
             {summary.map((item) => (
@@ -583,19 +563,113 @@ function Metric({ icon: Icon, label, value, tone }) {
   );
 }
 
-function JobButton({ job, selected, running, elapsed, status, onSelect, onRun }) {
-  const Icon = job.icon;
+function TradingPipelineSection({
+  title,
+  nodes,
+  selectedJob,
+  activeResult,
+  running,
+  timers,
+  reports,
+  selectedReport,
+  reportText,
+  onSelectJob,
+  onRunJob,
+  onRunAll,
+  onSelectReport,
+  onRefreshReports,
+}) {
   return (
-    <div className={`job-row ${selected ? 'selected' : ''}`}>
-      <button className="job-select" type="button" onClick={onSelect}>
-        <Icon size={18} />
-        <span>{job.label}</span>
+    <section className="pipeline-section">
+      <div className="pipeline-header">
+        <div className="section-title">
+          <BarChart3 size={18} />
+          <span>{title}</span>
+        </div>
+        <button className="run-all compact-run" type="button" onClick={onRunAll} disabled={running.all}>
+          {running.all ? <RefreshCw className="spin" size={18} /> : <Play size={18} />}
+          <span>运行完整链路</span>
+          <kbd>Ctrl Enter</kbd>
+        </button>
+      </div>
+      <div className="pipeline-flow">
+        {nodes.map((node, index) => (
+          <React.Fragment key={node.id}>
+            <PipelineNode
+              node={node}
+              selected={selectedJob === node.id}
+              onSelect={() => onSelectJob(node.id)}
+              onRun={() => onRunJob(node.id)}
+            />
+            {index < nodes.length - 1 ? <span className="pipeline-arrow">-&gt;</span> : null}
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="pipeline-detail-grid">
+        <div className="output-panel pipeline-output">
+          <div className="section-title">
+            <Terminal size={18} />
+            <span>节点输出</span>
+          </div>
+          <OutputView result={activeResult} running={Boolean(running[selectedJob])} elapsed={timers[selectedJob]} />
+        </div>
+        <div className="report-panel pipeline-report">
+          <div className="section-title">
+            <FileText size={18} />
+            <span>报告预览</span>
+          </div>
+          <div className="report-select-row">
+            <select value={selectedReport} onChange={(event) => onSelectReport(event.target.value)}>
+              <option value="">无报告</option>
+              {reports.map((report) => (
+                <option key={report.name} value={report.name}>{report.name}</option>
+              ))}
+            </select>
+            <button className="icon-button" type="button" onClick={onRefreshReports} aria-label="刷新报告">
+              <RefreshCw size={16} />
+            </button>
+          </div>
+          <pre className="report-preview">{reportText || '暂无报告'}</pre>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PipelineNode({ node, selected, onSelect, onRun }) {
+  return (
+    <article className={`pipeline-node ${selected ? 'selected' : ''}`}>
+      <button className="pipeline-node-main" type="button" onClick={onSelect}>
+        <span className={`role-badge role-${node.role.toLowerCase()}`}>{node.role}</span>
+        <strong>{node.title}</strong>
+        <small>{node.module}</small>
       </button>
-      <span className={`job-status ${status || 'idle'}`}>{running ? formatMs(elapsed || 0) : status || '待命'}</span>
-      <button className="job-run" type="button" onClick={onRun} disabled={running}>
-        {running ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
-        <kbd>{job.hint}</kbd>
+      <p>{node.summary}</p>
+      <div className="pipeline-node-meta">
+        <span className={`pipeline-state state-${node.statusText}`}>{node.statusText}</span>
+        <span>{node.outputLabel}: {node.outputValue}</span>
+      </div>
+      <button className="job-run pipeline-run" type="button" onClick={onRun} disabled={node.statusText === '运行中'}>
+        <Play size={16} />
+        <kbd>{node.hint}</kbd>
       </button>
+    </article>
+  );
+}
+
+function ModuleStatusCards({ cards }) {
+  return (
+    <div className="module-status-grid">
+      {cards.map((card) => (
+        <article className="module-status-card" key={card.id}>
+          <div>
+            <strong>{card.title}</strong>
+            <span className={`module-status ${statusClassName(card.status)}`}>{card.status}</span>
+          </div>
+          <p>{card.detail}</p>
+          <small>{card.metric}</small>
+        </article>
+      ))}
     </div>
   );
 }
@@ -846,10 +920,10 @@ function IntradaySymbolRow({ symbol }) {
   );
 }
 
-function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefresh }) {
-  const metricSummary = useMemo(() => summarizeMetrics(data.metrics), [data.metrics]);
-  const latestEvents = data.events.slice(0, 8);
-  const latestTraces = data.traces.slice(-8).reverse();
+function PremarketKnowledgeSection({ title, cards, data, loading, error, query, onQueryChange, onRefresh }) {
+  const context = data.premarketContext;
+  const constraints = context?.constraints || [];
+  const ragDebug = data.ragDebug;
   const knowledgeResults = data.knowledgeResults.slice(0, 6);
   const premarketRag = data.premarketRag || {};
   const evidencePayload = premarketRag.evidence?.payload || {};
@@ -864,7 +938,7 @@ function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefr
       <div className="observability-header">
         <div className="section-title">
           <GitBranch size={18} />
-          <span>可观测性与 RAG</span>
+          <span>{title}</span>
         </div>
         <div className="observability-actions">
           <label className="knowledge-search">
@@ -881,39 +955,29 @@ function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefr
         </div>
       </div>
       {error ? <div className="market-error">{error}</div> : null}
+      <ModuleStatusCards cards={cards} />
       <div className="observability-grid">
         <div className="observability-card">
-          <h2>Event Stream</h2>
-          <ul className="trace-list">
-            {latestEvents.length === 0 ? <li>暂无事件</li> : latestEvents.map((event) => (
-              <li key={event.event_id}>
-                <strong>{event.topic}</strong>
-                <span>{event.producer} · {event.run_id || '-'}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="observability-card">
-          <h2>Trace Timeline</h2>
-          <ul className="trace-list">
-            {latestTraces.length === 0 ? <li>暂无 trace</li> : latestTraces.map((trace) => (
-              <li key={trace.trace_id}>
-                <strong className={`trace-${trace.status}`}>{trace.step}</strong>
-                <span>{trace.agent} · {formatMs(trace.duration_ms)} · {trace.decision_summary || trace.status}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="observability-card">
-          <h2>Metrics</h2>
-          <div className="metric-mini-grid">
-            {metricSummary.map((item) => (
-              <div key={item.name}>
-                <span>{item.name}</span>
-                <strong>{item.value}</strong>
+          <h2>Premarket Context</h2>
+          {context ? (
+            <>
+              <div className="context-strip">
+                <span>{viewLabel(context.market_view)}</span>
+                <span>确认 {context.confirmed_themes?.length || 0}</span>
+                <span>失败 {context.failed_themes?.length || 0}</span>
               </div>
-            ))}
-          </div>
+              <ul className="trace-list">
+                {constraints.length === 0 ? <li>暂无盘前约束</li> : constraints.slice(0, 5).map((item) => (
+                  <li key={`${item.instruction_type}-${item.target}-${item.reason}`}>
+                    <strong>{item.instruction_type} · {item.target}</strong>
+                    <span>{item.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <div className="panel-empty">暂无盘前上下文</div>
+          )}
         </div>
         <div className="observability-card">
           <h2>RAG Search</h2>
@@ -960,23 +1024,38 @@ function ObservabilityPanel({ data, loading, error, query, onQueryChange, onRefr
             ))}
           </ul>
         </div>
+        <div className="observability-card">
+          <h2>RAG Debug</h2>
+          <div className="context-strip">
+            <span>{ragDebug?.result_count || 0} 条</span>
+            <span>{ragDebug?.query?.q || '-'}</span>
+          </div>
+          <ul className="trace-list">
+            {(ragDebug?.results || []).length === 0 ? <li>暂无证据</li> : ragDebug.results.slice(0, 5).map((item) => (
+              <li key={item.record.record_id}>
+                <strong>{item.record.title}</strong>
+                <span>{item.record.source_rank} · {item.record.themes?.join(', ') || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </section>
   );
 }
 
-function DecisionOpsPanel({ data, loading, decisionQuery, onDecisionQueryChange, onRefresh }) {
-  const context = data.premarketContext;
-  const constraints = context?.constraints || [];
+function OperationsAuditSection({ title, cards, data, loading, decisionQuery, onDecisionQueryChange, onRefresh }) {
+  const metricSummary = useMemo(() => summarizeMetrics(data.metrics), [data.metrics]);
+  const latestEvents = data.events.slice(0, 8);
+  const latestTraces = data.traces.slice(-8).reverse();
   const approvals = data.approvalQueue || [];
   const timeline = data.decisionTimeline || [];
-  const ragDebug = data.ragDebug;
   return (
     <section className="decision-panel">
       <div className="decision-header">
         <div className="section-title">
           <ShieldCheck size={18} />
-          <span>决策与约束</span>
+          <span>{title}</span>
         </div>
         <div className="decision-actions">
           <label className="decision-search">
@@ -992,28 +1071,40 @@ function DecisionOpsPanel({ data, loading, decisionQuery, onDecisionQueryChange,
           </button>
         </div>
       </div>
+      <ModuleStatusCards cards={cards} />
       <div className="decision-grid">
         <div className="decision-card">
-          <h2>Premarket Context</h2>
-          {context ? (
-            <>
-              <div className="context-strip">
-                <span>{viewLabel(context.market_view)}</span>
-                <span>确认 {context.confirmed_themes?.length || 0}</span>
-                <span>失败 {context.failed_themes?.length || 0}</span>
+          <h2>Event Stream</h2>
+          <ul className="trace-list">
+            {latestEvents.length === 0 ? <li>暂无事件</li> : latestEvents.map((event) => (
+              <li key={event.event_id}>
+                <strong>{event.topic}</strong>
+                <span>{event.producer} · {event.run_id || '-'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="decision-card">
+          <h2>Trace Timeline</h2>
+          <ul className="trace-list">
+            {latestTraces.length === 0 ? <li>暂无 trace</li> : latestTraces.map((trace) => (
+              <li key={trace.trace_id}>
+                <strong className={`trace-${trace.status}`}>{trace.step}</strong>
+                <span>{trace.agent} · {formatMs(trace.duration_ms)} · {trace.decision_summary || trace.status}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="decision-card">
+          <h2>Metrics</h2>
+          <div className="metric-mini-grid">
+            {metricSummary.map((item) => (
+              <div key={item.name}>
+                <span>{item.name}</span>
+                <strong>{item.value}</strong>
               </div>
-              <ul className="trace-list">
-                {constraints.length === 0 ? <li>暂无盘前约束</li> : constraints.slice(0, 5).map((item) => (
-                  <li key={`${item.instruction_type}-${item.target}-${item.reason}`}>
-                    <strong>{item.instruction_type} · {item.target}</strong>
-                    <span>{item.reason}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <div className="panel-empty">暂无盘前上下文</div>
-          )}
+            ))}
+          </div>
         </div>
         <div className="decision-card">
           <h2>Approval Queue</h2>
@@ -1033,21 +1124,6 @@ function DecisionOpsPanel({ data, loading, decisionQuery, onDecisionQueryChange,
               <li key={item.event_id}>
                 <strong>{item.topic}</strong>
                 <span>{item.intent_id || '-'} · {item.producer} · {formatDateTime(item.created_at)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="decision-card">
-          <h2>RAG Debug</h2>
-          <div className="context-strip">
-            <span>{ragDebug?.result_count || 0} 条</span>
-            <span>{ragDebug?.query?.q || '-'}</span>
-          </div>
-          <ul className="trace-list">
-            {(ragDebug?.results || []).length === 0 ? <li>暂无证据</li> : ragDebug.results.slice(0, 5).map((item) => (
-              <li key={item.record.record_id}>
-                <strong>{item.record.title}</strong>
-                <span>{item.record.source_rank} · {item.record.themes?.join(', ') || '-'}</span>
               </li>
             ))}
           </ul>
@@ -1383,6 +1459,15 @@ function statusLabel(value) {
     blocked: '受限',
     no_signal: '无信号',
   }[value] || value || '-';
+}
+
+function statusClassName(value) {
+  return {
+    已接入: 'ready',
+    部分接入: 'partial',
+    待接入: 'pending',
+    失败: 'failed',
+  }[value] || 'pending';
 }
 
 function sectionLabel(value) {

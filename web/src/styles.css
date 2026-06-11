@@ -1460,6 +1460,234 @@ kbd {
   color: #FF2D19;
 }
 
+.pipeline-section {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.pipeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.pipeline-header .section-title {
+  margin-bottom: 0;
+}
+
+.compact-run {
+  width: auto;
+  min-width: 188px;
+}
+
+.pipeline-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.pipeline-arrow {
+  align-self: center;
+  color: #888888;
+  font-weight: 800;
+}
+
+.pipeline-node {
+  min-width: 0;
+  min-height: 210px;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-top: 4px solid #0A77F5;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.pipeline-node.selected {
+  border-color: #FFDD00;
+  border-top-color: #FFDD00;
+  background: #FFFDF0;
+}
+
+.pipeline-node-main {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  color: #111111;
+  text-align: left;
+}
+
+.pipeline-node-main strong,
+.pipeline-node-main small,
+.pipeline-node p,
+.pipeline-node-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipeline-node-main strong {
+  white-space: nowrap;
+  font-size: 16px;
+}
+
+.pipeline-node-main small,
+.pipeline-node p {
+  color: #888888;
+}
+
+.pipeline-node p {
+  min-height: 54px;
+  margin: 10px 0;
+}
+
+.role-badge,
+.module-status,
+.pipeline-state {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.role-agent {
+  color: #0A77F5;
+  background: #F5FAFF;
+}
+
+.role-service {
+  color: #7A3100;
+  background: #FFFAD8;
+}
+
+.pipeline-node-meta {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: #555555;
+  font-size: 12px;
+}
+
+.pipeline-state {
+  color: #555555;
+  background: #F0F0F0;
+}
+
+.state-成功 {
+  color: #008500;
+  background: #E1FAE8;
+}
+
+.state-失败 {
+  color: #FF2D19;
+  background: #FFF1F0;
+}
+
+.state-运行中 {
+  color: #7A3100;
+  background: #FFFAD8;
+}
+
+.pipeline-run {
+  width: 100%;
+  background: #FFFFFF;
+}
+
+.pipeline-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pipeline-output,
+.pipeline-report {
+  min-height: 460px;
+}
+
+.module-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.module-status-card {
+  min-width: 0;
+  min-height: 132px;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.module-status-card div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.module-status-card strong {
+  color: #111111;
+}
+
+.module-status-card p {
+  margin: 8px 0;
+  color: #555555;
+  font-size: 12px;
+}
+
+.module-status-card small {
+  color: #888888;
+  font-weight: 700;
+}
+
+.module-status.ready {
+  color: #008500;
+  background: #E1FAE8;
+}
+
+.module-status.partial {
+  color: #7A3100;
+  background: #FFFAD8;
+}
+
+.module-status.pending {
+  color: #555555;
+  background: #F0F0F0;
+}
+
+.module-status.failed {
+  color: #FF2D19;
+  background: #FFF1F0;
+}
+
+@media (max-width: 1180px) {
+  .pipeline-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-arrow {
+    display: none;
+  }
+
+  .pipeline-detail-grid,
+  .module-status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .result-header {
   display: flex;
   align-items: center;
