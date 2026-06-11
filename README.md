@@ -2,10 +2,22 @@
 
 This repository implements a safe paper-trading MVP for the pasted A-share trading-agent specification.
 
+## 项目功能边界
+
+项目对外展示为三条主线：
+
+- 交易流水线：`PremarketAgent -> IntradayAgent -> RiskGateway -> PaperBroker -> ReviewAgent`。
+- 盘前知识系统：信息源、事件抽取、RAG 证据、规则/历史案例、`PremarketContext`。
+- 运维与审计：事件、Trace、Metrics、Approval Queue、报告预览。
+
+真正的业务 Agent 只有 `PremarketAgent`、`IntradayAgent` 和 `ReviewAgent`。RiskGateway 是确定性风控服务，不是业务 Agent；PaperBroker 是模拟执行服务，不是业务 Agent。RAG、信息源、知识库、`PremarketContext` 是能力模块，用来支撑盘前分析和盘中约束。
+
 The default loop is:
 
 ```text
-IntelBrief / MarketBar
+External information / MarketBar
+  -> PremarketAgent
+  -> PremarketContext
   -> IntradayAgent
   -> trading.intents
   -> RiskGateway
