@@ -47,7 +47,7 @@ export function fetchPremarketRagLatest() {
   return request('/api/premarket/rag/latest');
 }
 
-export function fetchPremarketDebug({ tradingDay, q = '盘前', limit = 8 } = {}) {
+export function fetchPremarketDebug({ tradingDay, q = '盘前', limit = 200 } = {}) {
   const params = new URLSearchParams({
     q,
     limit: String(limit),

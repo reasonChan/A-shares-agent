@@ -54,6 +54,7 @@ import './styles.css';
 const JOB_LABELS = Object.fromEntries(PIPELINE_NODES.map((item) => [item.id, item.title]));
 const DEBUG_STEP_LABELS = {
   source_fetch: '源站抓取状态',
+  crawled_documents: '全部爬取数据',
   raw_documents: '窗口内原始文档',
 };
 
@@ -197,7 +198,7 @@ function App() {
       const data = await fetchPremarketDebug({
         tradingDay: date,
         q: premarketDebugQuery || '盘前',
-        limit: 10,
+        limit: 200,
       });
       setPremarketDebug(data);
       setSelectedDebugStep((current) => (
@@ -704,7 +705,7 @@ function PremarketDebugPage({
           <ul className="debug-record-list">
             {(currentStep?.items || []).length === 0 ? (
               <li>暂无记录</li>
-            ) : currentStep.items.slice(0, 10).map((item, index) => (
+            ) : currentStep.items.map((item, index) => (
               <li key={`${currentStep.id}-${index}`}>
                 <strong>{debugItemTitle(item)}</strong>
                 <span>{debugItemSummary(item)}</span>
@@ -1629,6 +1630,15 @@ function debugItemSummary(item) {
 
 function debugItemMeta(item) {
   if (!item || typeof item !== 'object') return '-';
+  if ('in_premarket_window' in item) {
+    const values = [
+      item.source,
+      item.category,
+      item.in_premarket_window ? '入窗' : '未入窗',
+      item.published_at,
+    ].filter(Boolean);
+    return values.join(' · ') || '-';
+  }
   const values = [
     item.status,
     item.source_name || item.record_type || item.record?.record_type,

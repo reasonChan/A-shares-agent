@@ -185,7 +185,7 @@ def premarket_rag_latest() -> dict[str, object]:
 def premarket_debug(
     trading_day: Date | None = None,
     q: str = "盘前",
-    limit: int = 8,
+    limit: int = 200,
 ) -> dict[str, object]:
     repository = JsonlEventRepository(EVENT_DIR)
     report = _load_premarket_report(trading_day)
@@ -201,6 +201,14 @@ def premarket_debug(
         ("instructions", "盘前约束", "premarket.instructions"),
     ]
     source_fetch_step = _source_fetch_step(report, limit)
+    crawled_documents_step = _debug_step(
+        repository,
+        "crawled_documents",
+        "全部爬取数据",
+        "premarket.crawled_documents",
+        resolved_day,
+        None,
+    )
     steps = [
         _debug_step(repository, step_id, label, topic, resolved_day, limit)
         for step_id, label, topic in step_specs
@@ -226,6 +234,7 @@ def premarket_debug(
         "query": {"q": q, "limit": limit},
         "steps": [
             source_fetch_step,
+            crawled_documents_step,
             *steps,
             {
                 "id": "knowledge_store",
@@ -546,7 +555,7 @@ def _debug_step(
     label: str,
     topic: str,
     trading_day: Date,
-    limit: int,
+    limit: int | None,
 ) -> dict[str, object]:
     latest = _latest_event_payload(repository, topic, trading_day=trading_day)
     payload = latest["payload"] if latest else None
@@ -578,18 +587,18 @@ def _payload_count(payload: object) -> int:
     return 0
 
 
-def _payload_items(payload: object, limit: int) -> list[object]:
+def _payload_items(payload: object, limit: int | None) -> list[object]:
     if isinstance(payload, list):
-        return payload[:limit]
+        return payload if limit is None else payload[:limit]
     if isinstance(payload, dict):
         if isinstance(payload.get("value"), list):
-            return payload["value"][:limit]
+            return payload["value"] if limit is None else payload["value"][:limit]
         if payload.get("value") is not None:
             return [payload["value"]]
         if isinstance(payload.get("packs"), list):
-            return payload["packs"][:limit]
+            return payload["packs"] if limit is None else payload["packs"][:limit]
         if isinstance(payload.get("items"), list):
-            return payload["items"][:limit]
+            return payload["items"] if limit is None else payload["items"][:limit]
         return [payload] if payload else []
     return []
 

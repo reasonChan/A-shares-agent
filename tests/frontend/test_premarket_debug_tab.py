@@ -12,6 +12,7 @@ def test_premarket_debug_tab_is_available():
     assert "盘前调试" in source
     assert "PremarketDebugPage" in source
     assert "源站抓取状态" in source
+    assert "全部爬取数据" in source
     assert "窗口内原始文档" in source
     assert "落入知识库" in source
     assert "RAG 证据包" in source
@@ -23,3 +24,9 @@ def test_premarket_debug_api_client_exists():
 
     assert "fetchPremarketDebug" in source
     assert "/api/premarket/debug" in source
+
+
+def test_premarket_debug_records_are_not_hard_limited_to_ten_items():
+    source = MAIN.read_text(encoding="utf-8")
+
+    assert "currentStep.items.slice(0, 10)" not in source

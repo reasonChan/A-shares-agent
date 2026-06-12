@@ -158,10 +158,12 @@ class PremarketAgent:
             output_refs=[window.trading_day.isoformat()],
             decision_summary=f"{window.window_start.isoformat()} -> {window.auction_end.isoformat()}",
         )
+        crawled: list[PremarketNewsItem] = []
         collected: list[PremarketNewsItem] = []
         statuses: list[PremarketSourceStatus] = []
         for provider in self.providers:
             result = provider.fetch(limit=limit_per_source)
+            crawled.extend(result.items)
             self._metric(
                 "data_source_fetch_total",
                 1,
@@ -238,6 +240,7 @@ class PremarketAgent:
             instruction=instruction.model_dump(mode="json"),
         )
         report = report.model_copy(update={"markdown_report": render_premarket_markdown(report)})
+        crawled_document_payloads = self._to_crawled_documents(crawled, window)
         raw_document_payloads = [document.model_dump(mode="json") for document in raw_documents]
         event_payloads = [event.model_dump(mode="json") for event in events]
         cluster_payloads = [cluster.model_dump(mode="json") for cluster in clusters]
@@ -305,6 +308,18 @@ class PremarketAgent:
             output_refs=[post_close_digest.digest_id, morning_brief.brief_id, opening_radar.radar_id, instruction.instruction_id],
             evidence_ids=[event.event_id for event in events[:20]],
             decision_summary=f"themes={len(theme_seeds)}, avoid={len(avoid_candidates)}, indexed={indexed_count}",
+        )
+        self._publish(
+            "premarket.crawled_documents",
+            {
+                "total_count": len(crawled_document_payloads),
+                "window_start": window.window_start.isoformat(),
+                "window_end": window.auction_end.isoformat(),
+                "items": crawled_document_payloads,
+            },
+            window,
+            run_id,
+            [item["item_id"] for item in crawled_document_payloads[:100] if item.get("item_id")],
         )
         self._publish("premarket.raw_documents", raw_document_payloads, window, run_id)
         self._publish("premarket.normalized_events", event_payloads, window, run_id, [event.event_id for event in events])
@@ -414,6 +429,16 @@ class PremarketAgent:
             if window.window_start <= published <= window.auction_end:
                 filtered.append(item)
         return filtered
+
+    def _to_crawled_documents(self, items: list[PremarketNewsItem], window: PreMarketWindow) -> list[dict[str, object]]:
+        documents: list[dict[str, object]] = []
+        for item in items:
+            payload = item.model_dump(mode="json")
+            published = item.published_at.astimezone(CHINA_TZ) if item.published_at else None
+            payload["in_premarket_window"] = published is None or window.window_start <= published <= window.auction_end
+            documents.append(payload)
+        self.audit.write("premarket_crawled_documents_collected", {"count": len(documents)})
+        return documents
 
     def _to_raw_documents(self, items: list[PremarketNewsItem]) -> list[RawDocument]:
         documents = []

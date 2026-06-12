@@ -38,6 +38,15 @@ class LocalProvider:
                     sectors=["机器人"],
                     credibility=0.8,
                     risk_flags=["监管函"],
+                ),
+                PremarketNewsItem(
+                    source="local stale",
+                    source_tier="professional",
+                    title="过期盘前消息",
+                    summary="这条消息应当被窗口过滤，但仍要出现在全部爬取数据里。",
+                    published_at=datetime(2026, 6, 7, 8, 0, tzinfo=timezone.utc),
+                    category="stale_news",
+                    credibility=0.5,
                 )
             ],
             "ok",
@@ -74,7 +83,17 @@ def test_premarket_agent_builds_spec_outputs(tmp_path):
     assert report.morning_brief["top_themes"]
     assert report.morning_brief["avoid_list"]
     assert report.opening_radar["watch_items"] or report.opening_radar["risk_alerts"]
+    crawled_documents = bus.events("premarket.crawled_documents")
+    assert crawled_documents
+    assert crawled_documents[0]["total_count"] == 3
+    assert {item["title"] for item in crawled_documents[0]["items"]} >= {
+        "证监会支持并购重组与半导体融资",
+        "机器人公司收到监管函",
+        "过期盘前消息",
+    }
+    assert any(item["title"] == "过期盘前消息" and not item["in_premarket_window"] for item in crawled_documents[0]["items"])
     assert "premarket.raw_documents" in bus.all_events()
+    assert len(bus.events("premarket.raw_documents")[0]["value"]) == 2
     assert "premarket.normalized_events" in bus.all_events()
     assert "premarket.event_clusters" in bus.all_events()
     assert "premarket.morning_brief" in bus.all_events()

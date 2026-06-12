@@ -122,6 +122,21 @@ def test_premarket_debug_api_separates_source_fetch_from_window_filtered_documen
     trading_day = date(2026, 6, 12)
     repository.append_envelope(
         make_envelope(
+            "premarket.crawled_documents",
+            {
+                "total_count": 2,
+                "items": [
+                    {"item_id": "crawl_1", "source": "东方财富财经新闻", "title": "窗口外消息", "in_premarket_window": False},
+                    {"item_id": "crawl_2", "source": "新浪财经滚动", "title": "窗口外消息二", "in_premarket_window": False},
+                ],
+            },
+            producer="premarket_agent",
+            trading_day=trading_day,
+            run_id="run_empty",
+        )
+    )
+    repository.append_envelope(
+        make_envelope(
             "premarket.raw_documents",
             [],
             producer="premarket_agent",
@@ -149,11 +164,16 @@ def test_premarket_debug_api_separates_source_fetch_from_window_filtered_documen
     response = api_module.premarket_debug(trading_day=trading_day, q="盘前")
 
     source_fetch = response["steps"][0]
-    raw_documents = response["steps"][1]
+    crawled_documents = response["steps"][1]
+    raw_documents = response["steps"][2]
     assert source_fetch["id"] == "source_fetch"
     assert source_fetch["label"] == "源站抓取状态"
     assert source_fetch["count"] == 40
     assert source_fetch["items"][0]["source"] == "东方财富财经新闻"
+    assert crawled_documents["id"] == "crawled_documents"
+    assert crawled_documents["label"] == "全部爬取数据"
+    assert crawled_documents["count"] == 2
+    assert [item["title"] for item in crawled_documents["items"]] == ["窗口外消息", "窗口外消息二"]
     assert raw_documents["id"] == "raw_documents"
     assert raw_documents["label"] == "窗口内原始文档"
     assert raw_documents["status"] == "empty"
