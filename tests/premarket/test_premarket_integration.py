@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 from trading_agent_system.agents.premarket_agent import PremarketAgent
-from trading_agent_system.agents.premarket_agent.news_provider import NewsProviderResult
+from trading_agent_system.agents.premarket_agent.news_provider import FetchWindow, NewsProviderResult
 from trading_agent_system.agents.premarket_agent.trading_calendar import TradingCalendarService
 from trading_agent_system.core.audit import AuditLedger
 from trading_agent_system.core.event_bus import DurableEventBus
@@ -43,7 +43,7 @@ class LocalProvider:
                     source="local stale",
                     source_tier="professional",
                     title="过期盘前消息",
-                    summary="这条消息应当被窗口过滤，但仍要出现在全部爬取数据里。",
+                    summary="这条消息应当被窗口过滤，不进入盘前爬取明细。",
                     published_at=datetime(2026, 6, 7, 8, 0, tzinfo=timezone.utc),
                     category="stale_news",
                     credibility=0.5,
@@ -51,6 +51,69 @@ class LocalProvider:
             ],
             "ok",
         )
+
+
+class WindowAwareProvider:
+    source = "window-aware"
+
+    def __init__(self) -> None:
+        self.window: FetchWindow | None = None
+
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
+        self.window = window
+        return NewsProviderResult(
+            self.source,
+            [
+                PremarketNewsItem(
+                    source="window-aware",
+                    source_tier="professional",
+                    title="收盘后消息",
+                    summary="上一交易日收盘后消息，应进入盘前爬虫结果。",
+                    published_at=datetime(2026, 6, 8, 16, 0, tzinfo=timezone.utc),
+                    category="post_close_news",
+                    credibility=0.8,
+                ),
+                PremarketNewsItem(
+                    source="window-aware",
+                    source_tier="professional",
+                    title="开盘前消息",
+                    summary="开盘前消息，应进入盘前爬虫结果。",
+                    published_at=datetime(2026, 6, 9, 1, 20, tzinfo=timezone.utc),
+                    category="premarket_news",
+                    credibility=0.8,
+                ),
+                PremarketNewsItem(
+                    source="window-aware",
+                    source_tier="professional",
+                    title="盘中消息",
+                    summary="09:30 后的消息属于盘中 Agent，不应进入盘前爬虫结果。",
+                    published_at=datetime(2026, 6, 9, 1, 40, tzinfo=timezone.utc),
+                    category="intraday_news",
+                    credibility=0.8,
+                ),
+            ],
+            "ok",
+        )
+
+
+def test_premarket_agent_fetches_only_after_close_and_before_open(tmp_path):
+    provider = WindowAwareProvider()
+    bus = DurableEventBus(repository=JsonlEventRepository(tmp_path / "events"))
+    agent = PremarketAgent(
+        event_bus=bus,
+        audit=AuditLedger(tmp_path / "audit.jsonl"),
+        providers=[provider],
+        calendar=TradingCalendarService(),
+    )
+
+    agent.run(date(2026, 6, 9), limit_per_source=10)
+
+    assert provider.window is not None
+    assert provider.window.mode == "premarket"
+    assert provider.window.window_start.isoformat() == "2026-06-08T15:00:00+08:00"
+    assert provider.window.window_end.isoformat() == "2026-06-09T09:30:00+08:00"
+    crawled_documents = bus.events("premarket.crawled_documents")[0]["items"]
+    assert [item["title"] for item in crawled_documents] == ["收盘后消息", "开盘前消息"]
 
 
 def test_premarket_agent_builds_spec_outputs(tmp_path):
@@ -72,7 +135,7 @@ def test_premarket_agent_builds_spec_outputs(tmp_path):
 
     report = agent.run(date(2026, 6, 9), limit_per_source=5)
 
-    assert report.window_end.isoformat() == "2026-06-09T09:25:00+08:00"
+    assert report.window_end.isoformat() == "2026-06-09T09:30:00+08:00"
     assert report.post_close_digest is not None
     assert report.morning_brief is not None
     assert report.opening_radar is not None
@@ -85,14 +148,13 @@ def test_premarket_agent_builds_spec_outputs(tmp_path):
     assert report.opening_radar["watch_items"] or report.opening_radar["risk_alerts"]
     crawled_documents = bus.events("premarket.crawled_documents")
     assert crawled_documents
-    assert crawled_documents[0]["total_count"] == 3
-    assert {item["title"] for item in crawled_documents[0]["items"]} >= {
+    assert crawled_documents[0]["total_count"] == 2
+    assert {item["title"] for item in crawled_documents[0]["items"]} == {
         "证监会支持并购重组与半导体融资",
         "机器人公司收到监管函",
-        "过期盘前消息",
     }
     assert {item["provider_name"] for item in crawled_documents[0]["items"]} == {"local"}
-    assert any(item["title"] == "过期盘前消息" and not item["in_premarket_window"] for item in crawled_documents[0]["items"])
+    assert all(item["in_premarket_window"] for item in crawled_documents[0]["items"])
     assert report.source_status[0].provider_name == "local"
     assert "premarket.raw_documents" in bus.all_events()
     assert len(bus.events("premarket.raw_documents")[0]["value"]) == 2

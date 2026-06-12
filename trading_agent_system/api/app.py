@@ -567,8 +567,16 @@ def _debug_step(
         "status": "ok" if count else "empty",
         "count": count,
         "items": _payload_items(payload, limit),
+        "metadata": _payload_metadata(payload),
         "event": latest["event"] if latest else None,
     }
+
+
+def _payload_metadata(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    keys = ("window_start", "window_end", "total_count")
+    return {key: payload[key] for key in keys if key in payload}
 
 
 def _payload_count(payload: object) -> int:

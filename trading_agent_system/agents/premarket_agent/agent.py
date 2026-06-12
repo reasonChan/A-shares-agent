@@ -20,6 +20,7 @@ from trading_agent_system.schemas import (
     make_id,
 )
 
+from .news_provider import FetchWindow, NewsProviderResult
 from .builders import RiskFilter, ScenarioBuilder, ThemeDetector
 from .pipeline import EventClusterer, EventScorer
 from .rag.evaluation import RAGEvaluator
@@ -156,14 +157,18 @@ class PremarketAgent:
             step="build_window",
             status="success",
             output_refs=[window.trading_day.isoformat()],
-            decision_summary=f"{window.window_start.isoformat()} -> {window.auction_end.isoformat()}",
+            decision_summary=f"{window.window_start.isoformat()} -> {window.continuous_open.isoformat()}",
         )
+        fetch_window = self.calendar.build_fetch_window(report_date, mode="premarket")
         crawled: list[PremarketNewsItem] = []
         collected: list[PremarketNewsItem] = []
         statuses: list[PremarketSourceStatus] = []
         for provider in self.providers:
-            result = provider.fetch(limit=limit_per_source)
-            provider_items = [item.model_copy(update={"provider_name": result.source}) for item in result.items]
+            result = self._fetch_provider(provider, limit_per_source, fetch_window)
+            provider_items = [
+                item.model_copy(update={"provider_name": result.source})
+                for item in fetch_window.filter_items(result.items)
+            ]
             result.items = provider_items
             crawled.extend(provider_items)
             self._metric(
@@ -181,7 +186,7 @@ class PremarketAgent:
                     "error": result.error,
                 },
             )
-            filtered = self._filter_window(provider_items, window)
+            filtered = provider_items
             enriched = [self._enrich(item) for item in filtered]
             collected.extend(enriched)
             statuses.append(result.source_status(used_count=len(enriched)))
@@ -226,7 +231,7 @@ class PremarketAgent:
         report = PremarketReport(
             date=report_date,
             window_start=window.window_start,
-            window_end=window.auction_end,
+            window_end=fetch_window.window_end,
             market_view=market_view,
             summary=self._summary(market_view, catalysts, warnings),
             source_status=statuses,
@@ -242,7 +247,7 @@ class PremarketAgent:
             instruction=instruction.model_dump(mode="json"),
         )
         report = report.model_copy(update={"markdown_report": render_premarket_markdown(report)})
-        crawled_document_payloads = self._to_crawled_documents(crawled, window)
+        crawled_document_payloads = self._to_crawled_documents(crawled, fetch_window)
         raw_document_payloads = [document.model_dump(mode="json") for document in raw_documents]
         event_payloads = [event.model_dump(mode="json") for event in events]
         cluster_payloads = [cluster.model_dump(mode="json") for cluster in clusters]
@@ -315,8 +320,8 @@ class PremarketAgent:
             "premarket.crawled_documents",
             {
                 "total_count": len(crawled_document_payloads),
-                "window_start": window.window_start.isoformat(),
-                "window_end": window.auction_end.isoformat(),
+                "window_start": fetch_window.window_start.isoformat(),
+                "window_end": fetch_window.window_end.isoformat(),
                 "items": crawled_document_payloads,
             },
             window,
@@ -417,27 +422,19 @@ class PremarketAgent:
             return
         self.metrics.record(name, value, tags=tags, run_id=run_id)
 
-    def _filter_window(
-        self,
-        items: list[PremarketNewsItem],
-        window: PreMarketWindow,
-    ) -> list[PremarketNewsItem]:
-        filtered = []
-        for item in items:
-            if item.published_at is None:
-                filtered.append(item)
-                continue
-            published = item.published_at.astimezone(CHINA_TZ)
-            if window.window_start <= published <= window.auction_end:
-                filtered.append(item)
-        return filtered
+    def _fetch_provider(self, provider: object, limit: int, fetch_window: FetchWindow) -> NewsProviderResult:
+        try:
+            return provider.fetch(limit=limit, window=fetch_window)
+        except TypeError as error:
+            if "window" not in str(error):
+                raise
+            return provider.fetch(limit=limit)
 
-    def _to_crawled_documents(self, items: list[PremarketNewsItem], window: PreMarketWindow) -> list[dict[str, object]]:
+    def _to_crawled_documents(self, items: list[PremarketNewsItem], window: FetchWindow) -> list[dict[str, object]]:
         documents: list[dict[str, object]] = []
         for item in items:
             payload = item.model_dump(mode="json")
-            published = item.published_at.astimezone(CHINA_TZ) if item.published_at else None
-            payload["in_premarket_window"] = published is None or window.window_start <= published <= window.auction_end
+            payload["in_premarket_window"] = window.contains(item.published_at)
             documents.append(payload)
         self.audit.write("premarket_crawled_documents_collected", {"count": len(documents)})
         return documents

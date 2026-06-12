@@ -726,6 +726,14 @@ function PremarketDebugPage({
             <h2>{currentStepLabel}</h2>
             <span>{currentStep?.topic || '-'}</span>
           </div>
+          {currentStep?.metadata?.window_start || currentStep?.metadata?.window_end ? (
+            <div className="debug-step-window">
+              <span>窗口</span>
+              <strong>
+                {formatDateTime(currentStep.metadata.window_start)} {'->'} {formatDateTime(currentStep.metadata.window_end)}
+              </strong>
+            </div>
+          ) : null}
           <ul className="debug-record-list">
             {(currentStep?.items || []).length === 0 ? (
               <li>暂无记录</li>
@@ -756,10 +764,10 @@ function PremarketDebugPage({
                       ) : (
                         <ul className="debug-source-items">
                           {itemsForSource.map((crawledItem, crawledIndex) => (
-                            <li key={`${sourceKey}-${crawledItem.url || crawledItem.title || crawledIndex}`}>
-                              <strong>{debugItemTitle(crawledItem)}</strong>
-                              <span>{debugItemSummary(crawledItem)}</span>
-                              <code>{debugItemMeta(crawledItem)}</code>
+                            <li className="debug-source-item" key={`${sourceKey}-${crawledItem.url || crawledItem.title || crawledIndex}`}>
+                              <strong className="debug-source-item-title">{debugItemTitle(crawledItem)}</strong>
+                              <span className="debug-source-item-summary">{debugItemSummary(crawledItem)}</span>
+                              <code className="debug-source-item-meta">{debugItemMeta(crawledItem)}</code>
                             </li>
                           ))}
                         </ul>

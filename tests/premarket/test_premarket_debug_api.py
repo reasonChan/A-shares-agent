@@ -125,6 +125,8 @@ def test_premarket_debug_api_separates_source_fetch_from_window_filtered_documen
             "premarket.crawled_documents",
             {
                 "total_count": 2,
+                "window_start": "2026-06-11T15:00:00+08:00",
+                "window_end": "2026-06-12T09:30:00+08:00",
                 "items": [
                     {"item_id": "crawl_1", "source": "东方财富财经新闻", "title": "窗口外消息", "in_premarket_window": False},
                     {"item_id": "crawl_2", "source": "新浪财经滚动", "title": "窗口外消息二", "in_premarket_window": False},
@@ -173,6 +175,8 @@ def test_premarket_debug_api_separates_source_fetch_from_window_filtered_documen
     assert crawled_documents["id"] == "crawled_documents"
     assert crawled_documents["label"] == "全部爬取数据"
     assert crawled_documents["count"] == 2
+    assert crawled_documents["metadata"]["window_start"] == "2026-06-11T15:00:00+08:00"
+    assert crawled_documents["metadata"]["window_end"] == "2026-06-12T09:30:00+08:00"
     assert [item["title"] for item in crawled_documents["items"]] == ["窗口外消息", "窗口外消息二"]
     assert raw_documents["id"] == "raw_documents"
     assert raw_documents["label"] == "窗口内原始文档"
