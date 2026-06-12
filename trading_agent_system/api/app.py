@@ -190,16 +190,17 @@ def premarket_debug(
     repository = JsonlEventRepository(EVENT_DIR)
     report = _load_premarket_report(trading_day)
     resolved_day = trading_day or _report_date(report) or Date.today()
-    warnings: list[str] = []
+    warnings: list[str] = _report_warnings(report)
 
     step_specs = [
-        ("raw_documents", "爬虫/Provider 获取", "premarket.raw_documents"),
+        ("raw_documents", "窗口内原始文档", "premarket.raw_documents"),
         ("normalized_events", "事件抽取", "premarket.normalized_events"),
         ("event_clusters", "事件聚类", "premarket.event_clusters"),
         ("morning_brief", "盘前摘要", "premarket.morning_brief"),
         ("opening_radar", "开盘雷达", "premarket.opening_radar"),
         ("instructions", "盘前约束", "premarket.instructions"),
     ]
+    source_fetch_step = _source_fetch_step(report, limit)
     steps = [
         _debug_step(repository, step_id, label, topic, resolved_day, limit)
         for step_id, label, topic in step_specs
@@ -224,6 +225,7 @@ def premarket_debug(
         "trading_day": resolved_day.isoformat(),
         "query": {"q": q, "limit": limit},
         "steps": [
+            source_fetch_step,
             *steps,
             {
                 "id": "knowledge_store",
@@ -548,12 +550,13 @@ def _debug_step(
 ) -> dict[str, object]:
     latest = _latest_event_payload(repository, topic, trading_day=trading_day)
     payload = latest["payload"] if latest else None
+    count = _payload_count(payload)
     return {
         "id": step_id,
         "label": label,
         "topic": topic,
-        "status": "ok" if latest else "empty",
-        "count": _payload_count(payload),
+        "status": "ok" if count else "empty",
+        "count": count,
         "items": _payload_items(payload, limit),
         "event": latest["event"] if latest else None,
     }
@@ -563,6 +566,10 @@ def _payload_count(payload: object) -> int:
     if isinstance(payload, list):
         return len(payload)
     if isinstance(payload, dict):
+        if isinstance(payload.get("value"), list):
+            return len(payload["value"])
+        if payload.get("value") is not None:
+            return 1
         if isinstance(payload.get("packs"), list):
             return len(payload["packs"])
         if isinstance(payload.get("items"), list):
@@ -575,6 +582,10 @@ def _payload_items(payload: object, limit: int) -> list[object]:
     if isinstance(payload, list):
         return payload[:limit]
     if isinstance(payload, dict):
+        if isinstance(payload.get("value"), list):
+            return payload["value"][:limit]
+        if payload.get("value") is not None:
+            return [payload["value"]]
         if isinstance(payload.get("packs"), list):
             return payload["packs"][:limit]
         if isinstance(payload.get("items"), list):
@@ -600,6 +611,34 @@ def _report_date(report: dict[str, object] | None) -> Date | None:
     if not report or not report.get("date"):
         return None
     return Date.fromisoformat(str(report["date"]))
+
+
+def _source_fetch_step(report: dict[str, object] | None, limit: int) -> dict[str, object]:
+    source_status = []
+    if report and isinstance(report.get("source_status"), list):
+        source_status = [item for item in report["source_status"] if isinstance(item, dict)]
+    fetched_count = sum(int(item.get("fetched_count") or 0) for item in source_status)
+    used_count = sum(int(item.get("used_count") or 0) for item in source_status)
+    return {
+        "id": "source_fetch",
+        "label": "源站抓取状态",
+        "topic": "premarket.report.source_status",
+        "status": "ok" if fetched_count else "empty",
+        "count": fetched_count,
+        "items": source_status[:limit],
+        "event": None,
+        "summary": {
+            "fetched_count": fetched_count,
+            "used_count": used_count,
+            "filtered_count": max(fetched_count - used_count, 0),
+        },
+    }
+
+
+def _report_warnings(report: dict[str, object] | None) -> list[str]:
+    if not report or not isinstance(report.get("warnings"), list):
+        return []
+    return [str(item) for item in report["warnings"]]
 
 
 def _premarket_conclusion(report: dict[str, object] | None) -> dict[str, object]:

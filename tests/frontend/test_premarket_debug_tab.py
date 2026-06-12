@@ -11,7 +11,8 @@ def test_premarket_debug_tab_is_available():
 
     assert "盘前调试" in source
     assert "PremarketDebugPage" in source
-    assert "爬虫/Provider 获取" in source
+    assert "源站抓取状态" in source
+    assert "窗口内原始文档" in source
     assert "落入知识库" in source
     assert "RAG 证据包" in source
     assert "最终结论" in source

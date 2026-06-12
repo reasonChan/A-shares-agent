@@ -52,6 +52,10 @@ import {
 import './styles.css';
 
 const JOB_LABELS = Object.fromEntries(PIPELINE_NODES.map((item) => [item.id, item.title]));
+const DEBUG_STEP_LABELS = {
+  source_fetch: '源站抓取状态',
+  raw_documents: '窗口内原始文档',
+};
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -645,6 +649,7 @@ function PremarketDebugPage({
 }) {
   const steps = data?.steps || [];
   const currentStep = steps.find((step) => step.id === selectedStep) || steps[0] || null;
+  const currentStepLabel = currentStep?.label || DEBUG_STEP_LABELS[currentStep?.id] || '源站抓取状态';
   const conclusion = data?.conclusion || {};
   const knowledgeResults = data?.knowledge?.query_results || [];
   const ragPacks = data?.rag?.evidence?.payload?.packs || [];
@@ -685,7 +690,7 @@ function PremarketDebugPage({
               key={step.id}
               onClick={() => onSelectStep(step.id)}
             >
-              <span>{step.label}</span>
+              <span>{step.label || DEBUG_STEP_LABELS[step.id] || step.id}</span>
               <strong>{step.count}</strong>
               <small>{step.status}</small>
             </button>
@@ -693,7 +698,7 @@ function PremarketDebugPage({
         </aside>
         <div className="debug-detail">
           <div className="debug-card-head">
-            <h2>{currentStep?.label || '爬虫/Provider 获取'}</h2>
+            <h2>{currentStepLabel}</h2>
             <span>{currentStep?.topic || '-'}</span>
           </div>
           <ul className="debug-record-list">
@@ -1595,6 +1600,7 @@ function formatScore(value) {
 
 function debugItemTitle(item) {
   if (!item || typeof item !== 'object') return '-';
+  if (item.source && ('fetched_count' in item || 'used_count' in item)) return item.source;
   if (item.title) return item.title;
   if (item.summary) return item.summary;
   if (item.section) return sectionLabel(item.section);
@@ -1607,6 +1613,12 @@ function debugItemTitle(item) {
 
 function debugItemSummary(item) {
   if (!item || typeof item !== 'object') return '';
+  if ('fetched_count' in item || 'used_count' in item) {
+    const fetched = item.fetched_count ?? 0;
+    const used = item.used_count ?? 0;
+    const error = item.error ? ` · ${item.error}` : '';
+    return `抓取 ${fetched} 条，入窗 ${used} 条${error}`;
+  }
   if (item.summary) return item.summary;
   if (item.raw_text) return String(item.raw_text).slice(0, 140);
   if (item.reason) return item.reason;
@@ -1618,7 +1630,8 @@ function debugItemSummary(item) {
 function debugItemMeta(item) {
   if (!item || typeof item !== 'object') return '-';
   const values = [
-    item.source || item.source_name || item.record_type || item.record?.record_type,
+    item.status,
+    item.source_name || item.record_type || item.record?.record_type,
     item.event_type,
     item.importance,
     item.source_rank || item.record?.source_rank,
