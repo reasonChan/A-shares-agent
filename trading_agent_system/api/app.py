@@ -181,6 +181,75 @@ def premarket_rag_latest() -> dict[str, object]:
     }
 
 
+@app.get("/api/premarket/debug")
+def premarket_debug(
+    trading_day: Date | None = None,
+    q: str = "盘前",
+    limit: int = 8,
+) -> dict[str, object]:
+    repository = JsonlEventRepository(EVENT_DIR)
+    report = _load_premarket_report(trading_day)
+    resolved_day = trading_day or _report_date(report) or Date.today()
+    warnings: list[str] = []
+
+    step_specs = [
+        ("raw_documents", "爬虫/Provider 获取", "premarket.raw_documents"),
+        ("normalized_events", "事件抽取", "premarket.normalized_events"),
+        ("event_clusters", "事件聚类", "premarket.event_clusters"),
+        ("morning_brief", "盘前摘要", "premarket.morning_brief"),
+        ("opening_radar", "开盘雷达", "premarket.opening_radar"),
+        ("instructions", "盘前约束", "premarket.instructions"),
+    ]
+    steps = [
+        _debug_step(repository, step_id, label, topic, resolved_day, limit)
+        for step_id, label, topic in step_specs
+    ]
+
+    knowledge_records: list[dict[str, object]] = []
+    knowledge_results: list[dict[str, object]] = []
+    try:
+        store = KnowledgeStore(KNOWLEDGE_PATH)
+        knowledge_records = [
+            record.model_dump(mode="json")
+            for record in store.list_records(trading_day=resolved_day, limit=limit)
+        ]
+        knowledge_results = [
+            result.model_dump(mode="json")
+            for result in RagRetriever(store).search(query=q, trading_day=resolved_day, top_k=limit)
+        ]
+    except Exception as error:  # pragma: no cover - defensive for broken local sqlite files
+        warnings.append(f"knowledge store read failed: {error}")
+
+    return {
+        "trading_day": resolved_day.isoformat(),
+        "query": {"q": q, "limit": limit},
+        "steps": [
+            *steps,
+            {
+                "id": "knowledge_store",
+                "label": "落入知识库",
+                "topic": "knowledge_records",
+                "status": "ok" if knowledge_records else "empty",
+                "count": len(knowledge_records),
+                "items": knowledge_records[:limit],
+                "event": None,
+            },
+            _debug_step(repository, "rag_evidence", "RAG 证据包", "premarket.rag_evidence_packs", resolved_day, limit),
+        ],
+        "knowledge": {
+            "record_count": len(knowledge_records),
+            "records": knowledge_records[:limit],
+            "query_results": knowledge_results,
+        },
+        "rag": {
+            "evidence": _latest_event_payload(repository, "premarket.rag_evidence_packs", trading_day=resolved_day),
+            "evaluation": _latest_event_payload(repository, "premarket.rag_evaluation", trading_day=resolved_day),
+        },
+        "conclusion": _premarket_conclusion(report),
+        "warnings": warnings,
+    }
+
+
 @app.get("/api/intraday/latest")
 def latest_intraday_analysis() -> dict[str, object]:
     repository = JsonlEventRepository(EVENT_DIR)
@@ -446,8 +515,13 @@ def _payload_intent_id(payload: dict[str, object]) -> str | None:
     return None
 
 
-def _latest_event_payload(repository: JsonlEventRepository, topic: str) -> dict[str, object] | None:
-    envelopes = repository.load_envelopes(topic, limit=1)
+def _latest_event_payload(
+    repository: JsonlEventRepository,
+    topic: str,
+    *,
+    trading_day: Date | None = None,
+) -> dict[str, object] | None:
+    envelopes = repository.load_envelopes(topic, trading_day=trading_day, limit=1)
     if not envelopes:
         return None
     envelope = envelopes[-1]
@@ -461,6 +535,90 @@ def _latest_event_payload(repository: JsonlEventRepository, topic: str) -> dict[
             "evidence_ids": envelope.evidence_ids,
         },
         "payload": envelope.payload,
+    }
+
+
+def _debug_step(
+    repository: JsonlEventRepository,
+    step_id: str,
+    label: str,
+    topic: str,
+    trading_day: Date,
+    limit: int,
+) -> dict[str, object]:
+    latest = _latest_event_payload(repository, topic, trading_day=trading_day)
+    payload = latest["payload"] if latest else None
+    return {
+        "id": step_id,
+        "label": label,
+        "topic": topic,
+        "status": "ok" if latest else "empty",
+        "count": _payload_count(payload),
+        "items": _payload_items(payload, limit),
+        "event": latest["event"] if latest else None,
+    }
+
+
+def _payload_count(payload: object) -> int:
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        if isinstance(payload.get("packs"), list):
+            return len(payload["packs"])
+        if isinstance(payload.get("items"), list):
+            return len(payload["items"])
+        return 1 if payload else 0
+    return 0
+
+
+def _payload_items(payload: object, limit: int) -> list[object]:
+    if isinstance(payload, list):
+        return payload[:limit]
+    if isinstance(payload, dict):
+        if isinstance(payload.get("packs"), list):
+            return payload["packs"][:limit]
+        if isinstance(payload.get("items"), list):
+            return payload["items"][:limit]
+        return [payload] if payload else []
+    return []
+
+
+def _load_premarket_report(trading_day: Date | None) -> dict[str, object] | None:
+    PREMARKET_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    if trading_day is not None:
+        path = PREMARKET_REPORT_DIR / f"{trading_day.isoformat()}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    reports = sorted(PREMARKET_REPORT_DIR.glob("*.json"), reverse=True)
+    if not reports:
+        return None
+    return json.loads(reports[0].read_text(encoding="utf-8"))
+
+
+def _report_date(report: dict[str, object] | None) -> Date | None:
+    if not report or not report.get("date"):
+        return None
+    return Date.fromisoformat(str(report["date"]))
+
+
+def _premarket_conclusion(report: dict[str, object] | None) -> dict[str, object]:
+    if not report:
+        return {
+            "available": False,
+            "market_view": "-",
+            "summary": "暂无盘前报告",
+            "watchlist": [],
+            "avoid_list": [],
+            "catalysts": [],
+        }
+    return {
+        "available": True,
+        "market_view": report.get("market_view") or "-",
+        "summary": report.get("summary") or "",
+        "watchlist": report.get("watchlist") or [],
+        "avoid_list": report.get("avoid_list") or [],
+        "catalysts": report.get("catalysts") or [],
     }
 
 

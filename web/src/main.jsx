@@ -30,6 +30,7 @@ import {
   fetchIntradayLatest,
   fetchMarketQuotes,
   fetchPremarketContext,
+  fetchPremarketDebug,
   fetchPremarketLatest,
   fetchPremarketRagLatest,
   fetchRagDebug,
@@ -54,6 +55,22 @@ const JOB_LABELS = Object.fromEntries(PIPELINE_NODES.map((item) => [item.id, ite
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function pageEyebrow(activePage) {
+  return {
+    console: 'Paper Trading',
+    'premarket-debug': 'Premarket Debug',
+    architecture: 'Architecture Map',
+  }[activePage] || 'Paper Trading';
+}
+
+function pageTitle(activePage) {
+  return {
+    console: 'A股 Agent 控制台',
+    'premarket-debug': '盘前信息 Agent 调试',
+    architecture: '当前 Agent 分层功能说明',
+  }[activePage] || 'A股 Agent 控制台';
 }
 
 function formatMs(ms) {
@@ -90,6 +107,11 @@ function App() {
   const [premarket, setPremarket] = useState(null);
   const [premarketLoading, setPremarketLoading] = useState(false);
   const [premarketError, setPremarketError] = useState('');
+  const [premarketDebug, setPremarketDebug] = useState(null);
+  const [premarketDebugLoading, setPremarketDebugLoading] = useState(false);
+  const [premarketDebugError, setPremarketDebugError] = useState('');
+  const [premarketDebugQuery, setPremarketDebugQuery] = useState('机器人');
+  const [selectedDebugStep, setSelectedDebugStep] = useState('raw_documents');
   const [intraday, setIntraday] = useState({ report: null, event: null });
   const [intradayLoading, setIntradayLoading] = useState(false);
   const [intradayError, setIntradayError] = useState('');
@@ -164,6 +186,28 @@ function App() {
     }
   }, []);
 
+  const refreshPremarketDebug = useCallback(async () => {
+    setPremarketDebugLoading(true);
+    setPremarketDebugError('');
+    try {
+      const data = await fetchPremarketDebug({
+        tradingDay: date,
+        q: premarketDebugQuery || '盘前',
+        limit: 10,
+      });
+      setPremarketDebug(data);
+      setSelectedDebugStep((current) => (
+        data.steps?.some((step) => step.id === current)
+          ? current
+          : data.steps?.[0]?.id || 'raw_documents'
+      ));
+    } catch (error) {
+      setPremarketDebugError(error.message);
+    } finally {
+      setPremarketDebugLoading(false);
+    }
+  }, [date, premarketDebugQuery]);
+
   const refreshIntraday = useCallback(async () => {
     setIntradayLoading(true);
     setIntradayError('');
@@ -237,6 +281,10 @@ function App() {
   }, [refreshPremarket]);
 
   useEffect(() => {
+    refreshPremarketDebug().catch(() => {});
+  }, [refreshPremarketDebug]);
+
+  useEffect(() => {
     refreshIntraday().catch(() => {});
   }, [refreshIntraday]);
 
@@ -285,6 +333,7 @@ function App() {
       if (job === 'premarket') {
         await refreshPremarket();
         await refreshObservability();
+        await refreshPremarketDebug();
       }
       if (job === 'intraday') {
         await refreshIntraday();
@@ -311,7 +360,7 @@ function App() {
       setRunning((current) => ({ ...current, [job]: false }));
       setTimers((current) => ({ ...current, [job]: 0 }));
     }
-  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshPremarketDebug, refreshReports]);
 
   const executeAll = useCallback(async () => {
     const allKey = 'all';
@@ -339,6 +388,7 @@ function App() {
       };
       setResults((current) => ({ ...current, ...nextResults }));
       await refreshPremarket();
+      await refreshPremarketDebug();
       await refreshIntraday();
       await refreshReports();
       await refreshObservability();
@@ -360,7 +410,7 @@ function App() {
       setRunning((current) => ({ ...current, [allKey]: false }));
       setTimers((current) => ({ ...current, [allKey]: 0 }));
     }
-  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshReports]);
+  }, [date, refreshIntraday, refreshObservability, refreshPremarket, refreshPremarketDebug, refreshReports]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -402,8 +452,8 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{activePage === 'console' ? 'Paper Trading' : 'Architecture Map'}</p>
-          <h1>{activePage === 'console' ? 'A股 Agent 控制台' : '当前 Agent 分层功能说明'}</h1>
+          <p className="eyebrow">{pageEyebrow(activePage)}</p>
+          <h1>{pageTitle(activePage)}</h1>
         </div>
         <div className="top-actions">
           <div className="view-switch" aria-label="页面切换">
@@ -413,6 +463,13 @@ function App() {
               onClick={() => setActivePage('console')}
             >
               控制台
+            </button>
+            <button
+              className={activePage === 'premarket-debug' ? 'active' : ''}
+              type="button"
+              onClick={() => setActivePage('premarket-debug')}
+            >
+              盘前调试
             </button>
             <button
               className={activePage === 'architecture' ? 'active' : ''}
@@ -432,6 +489,18 @@ function App() {
 
       {activePage === 'architecture' ? (
         <AgentArchitecturePage />
+      ) : activePage === 'premarket-debug' ? (
+        <PremarketDebugPage
+          data={premarketDebug}
+          loading={premarketDebugLoading || Boolean(running.premarket)}
+          error={premarketDebugError}
+          query={premarketDebugQuery}
+          selectedStep={selectedDebugStep}
+          onQueryChange={setPremarketDebugQuery}
+          onSelectStep={setSelectedDebugStep}
+          onRefresh={refreshPremarketDebug}
+          onRun={() => executeJob('premarket')}
+        />
       ) : (
         <>
           <section className="status-grid">
@@ -560,6 +629,129 @@ function Metric({ icon: Icon, label, value, tone }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function PremarketDebugPage({
+  data,
+  loading,
+  error,
+  query,
+  selectedStep,
+  onQueryChange,
+  onSelectStep,
+  onRefresh,
+  onRun,
+}) {
+  const steps = data?.steps || [];
+  const currentStep = steps.find((step) => step.id === selectedStep) || steps[0] || null;
+  const conclusion = data?.conclusion || {};
+  const knowledgeResults = data?.knowledge?.query_results || [];
+  const ragPacks = data?.rag?.evidence?.payload?.packs || [];
+  const evaluationSummary = data?.rag?.evaluation?.payload?.summary || {};
+  return (
+    <section className="premarket-debug-page">
+      <div className="premarket-debug-toolbar">
+        <div className="section-title">
+          <Newspaper size={18} />
+          <span>盘前信息 Agent 链路</span>
+        </div>
+        <div className="premarket-debug-actions">
+          <label className="knowledge-search debug-query">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="查询知识库 / RAG"
+            />
+          </label>
+          <button className="toggle-button" type="button" onClick={onRun} disabled={loading}>
+            {loading ? '运行中' : '运行盘前分析'}
+          </button>
+          <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading} aria-label="刷新盘前调试">
+            <RefreshCw className={loading ? 'spin' : ''} size={16} />
+          </button>
+        </div>
+      </div>
+      {error ? <div className="market-error">{error}</div> : null}
+      <div className="premarket-debug-grid">
+        <aside className="debug-chain">
+          {steps.length === 0 ? (
+            <div className="panel-empty">暂无链路数据</div>
+          ) : steps.map((step) => (
+            <button
+              className={`debug-step ${currentStep?.id === step.id ? 'active' : ''}`}
+              type="button"
+              key={step.id}
+              onClick={() => onSelectStep(step.id)}
+            >
+              <span>{step.label}</span>
+              <strong>{step.count}</strong>
+              <small>{step.status}</small>
+            </button>
+          ))}
+        </aside>
+        <div className="debug-detail">
+          <div className="debug-card-head">
+            <h2>{currentStep?.label || '爬虫/Provider 获取'}</h2>
+            <span>{currentStep?.topic || '-'}</span>
+          </div>
+          <ul className="debug-record-list">
+            {(currentStep?.items || []).length === 0 ? (
+              <li>暂无记录</li>
+            ) : currentStep.items.slice(0, 10).map((item, index) => (
+              <li key={`${currentStep.id}-${index}`}>
+                <strong>{debugItemTitle(item)}</strong>
+                <span>{debugItemSummary(item)}</span>
+                <code>{debugItemMeta(item)}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <aside className="debug-side">
+          <article className="debug-side-card">
+            <h2>最终结论</h2>
+            <div className="context-strip">
+              <span>{viewLabel(conclusion.market_view)}</span>
+              <span>观察 {conclusion.watchlist?.length || 0}</span>
+              <span>禁入 {conclusion.avoid_list?.length || 0}</span>
+            </div>
+            <p>{conclusion.summary || '暂无盘前报告'}</p>
+          </article>
+          <article className="debug-side-card">
+            <h2>落入知识库</h2>
+            <div className="context-strip">
+              <span>{data?.knowledge?.record_count || 0} 条记录</span>
+              <span>{knowledgeResults.length} 条命中</span>
+            </div>
+            <ul className="trace-list">
+              {knowledgeResults.length === 0 ? <li>暂无查询结果</li> : knowledgeResults.slice(0, 5).map((item) => (
+                <li key={item.record.record_id}>
+                  <strong>{item.record.title}</strong>
+                  <span>{item.record.record_type} · score {formatScore(item.score)}</span>
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="debug-side-card">
+            <h2>RAG 证据包</h2>
+            <div className="context-strip">
+              <span>{ragPacks.length} packs</span>
+              <span>覆盖 {formatPercentNumber(evaluationSummary.avg_evidence_coverage_ratio)}</span>
+              <span>引用 {formatPercentNumber(evaluationSummary.avg_citation_coverage_ratio)}</span>
+            </div>
+            <ul className="trace-list">
+              {ragPacks.length === 0 ? <li>暂无 evidence pack</li> : ragPacks.slice(0, 5).map((pack) => (
+                <li key={pack.pack_id || pack.section}>
+                  <strong>{sectionLabel(pack.section)}</strong>
+                  <span>{(pack.items || []).length} 条证据 · token {pack.token_estimate || 0}</span>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </aside>
+      </div>
+    </section>
   );
 }
 
@@ -1399,6 +1591,39 @@ function formatPlain(value) {
 function formatScore(value) {
   if (value === null || value === undefined) return '-';
   return Number(value).toFixed(2);
+}
+
+function debugItemTitle(item) {
+  if (!item || typeof item !== 'object') return '-';
+  if (item.title) return item.title;
+  if (item.summary) return item.summary;
+  if (item.section) return sectionLabel(item.section);
+  if (item.record?.title) return item.record.title;
+  if (item.event_id) return item.event_id;
+  if (item.source_id) return item.source_id;
+  if (item.cluster_id) return item.cluster_id;
+  return JSON.stringify(item).slice(0, 80);
+}
+
+function debugItemSummary(item) {
+  if (!item || typeof item !== 'object') return '';
+  if (item.summary) return item.summary;
+  if (item.raw_text) return String(item.raw_text).slice(0, 140);
+  if (item.reason) return item.reason;
+  if (item.items) return `${item.items.length} 条证据`;
+  if (item.record?.summary) return item.record.summary;
+  return '';
+}
+
+function debugItemMeta(item) {
+  if (!item || typeof item !== 'object') return '-';
+  const values = [
+    item.source || item.source_name || item.record_type || item.record?.record_type,
+    item.event_type,
+    item.importance,
+    item.source_rank || item.record?.source_rank,
+  ].filter(Boolean);
+  return values.join(' · ') || '-';
 }
 
 function formatAmount(value) {

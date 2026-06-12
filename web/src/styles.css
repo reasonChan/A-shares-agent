@@ -1673,6 +1673,175 @@ kbd {
   background: #FFF1F0;
 }
 
+.premarket-debug-page {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.premarket-debug-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.premarket-debug-toolbar .section-title {
+  margin-bottom: 0;
+}
+
+.premarket-debug-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-query {
+  width: 280px;
+}
+
+.premarket-debug-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 360px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.debug-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+  color: #111111;
+  text-align: left;
+}
+
+.debug-step.active {
+  border-color: #FFDD00;
+  background: #FFFAD8;
+}
+
+.debug-step span,
+.debug-step small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-step span {
+  font-weight: 700;
+}
+
+.debug-step strong {
+  grid-row: span 2;
+  align-self: center;
+  color: #111111;
+  font-size: 20px;
+}
+
+.debug-step small {
+  color: #888888;
+  font-size: 12px;
+}
+
+.debug-detail,
+.debug-side-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.debug-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.debug-card-head h2,
+.debug-side-card h2 {
+  margin: 0;
+  color: #111111;
+  font-size: 15px;
+}
+
+.debug-card-head span {
+  overflow: hidden;
+  color: #888888;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.debug-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.debug-record-list li {
+  display: grid;
+  gap: 4px;
+  min-height: 56px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.debug-record-list strong,
+.debug-record-list span,
+.debug-record-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-record-list strong {
+  color: #111111;
+}
+
+.debug-record-list span,
+.debug-record-list code {
+  color: #888888;
+  font-size: 12px;
+}
+
+.debug-record-list code {
+  font-family: inherit;
+}
+
+.debug-side {
+  display: grid;
+  gap: 12px;
+}
+
+.debug-side-card p {
+  margin: 8px 0 0;
+  color: #555555;
+}
+
 @media (max-width: 1180px) {
   .pipeline-flow {
     grid-template-columns: 1fr;
@@ -1683,8 +1852,19 @@ kbd {
   }
 
   .pipeline-detail-grid,
-  .module-status-grid {
+  .module-status-grid,
+  .premarket-debug-grid {
     grid-template-columns: 1fr;
+  }
+
+  .premarket-debug-toolbar,
+  .premarket-debug-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .debug-query {
+    width: 100%;
   }
 }
 
