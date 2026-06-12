@@ -11,8 +11,11 @@ from trading_agent_system.agents.premarket_agent.news_provider import (
     CsrcNewsProvider,
     DemoPremarketNewsProvider,
     EastMoneyNewsProvider,
+    KaipanlaNewsProvider,
     RssNewsProvider,
     SinaFinanceRollProvider,
+    TonghuashunNewsProvider,
+    XueqiuHotProvider,
 )
 from trading_agent_system.agents.premarket_agent.rag.rag_service import PreMarketRAGService
 from trading_agent_system.core.audit import AuditLedger
@@ -29,7 +32,7 @@ def main() -> None:
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--config", default="configs/app.yaml")
     parser.add_argument("--demo", action="store_true")
-    parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
     app_config = load_yaml_config(args.config)
@@ -51,7 +54,7 @@ def main() -> None:
         knowledge_indexer=RagIndexer(knowledge_store),
         premarket_rag_service=premarket_rag_service,
     )
-    report = agent.run(report_date=report_date, limit_per_source=args.limit)
+    report = agent.run(report_date=report_date, limit_per_source=resolve_limit_per_source(app_config, args.limit))
     write_report(report, app_config)
     print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
@@ -67,10 +70,29 @@ def build_providers(app_config: dict[str, object]) -> list[object]:
             providers.append(EastMoneyNewsProvider())
         elif name == "sina":
             providers.append(SinaFinanceRollProvider())
+        elif name == "sina_finance":
+            providers.append(SinaFinanceRollProvider(source="新浪财经滚动", lid="2516", category="sina_finance"))
+        elif name == "sina_stock":
+            providers.append(SinaFinanceRollProvider(source="新浪股票滚动", lid="2517", category="sina_stock"))
+        elif name == "sina_global":
+            providers.append(SinaFinanceRollProvider(source="新浪全球财经", lid="2518", category="sina_global"))
         elif name == "cailianpress":
             providers.append(CailianpressTelegraphProvider())
+        elif name == "kaipanla":
+            providers.append(KaipanlaNewsProvider())
+        elif name == "tonghuashun":
+            providers.append(TonghuashunNewsProvider())
+        elif name == "xueqiu":
+            providers.append(XueqiuHotProvider())
     if not providers:
-        providers = [CsrcNewsProvider(), EastMoneyNewsProvider(), SinaFinanceRollProvider(), CailianpressTelegraphProvider()]
+        providers = [
+            CsrcNewsProvider(),
+            EastMoneyNewsProvider(),
+            SinaFinanceRollProvider(),
+            CailianpressTelegraphProvider(),
+            KaipanlaNewsProvider(),
+            XueqiuHotProvider(),
+        ]
     feeds = premarket.get("news_feeds", []) if isinstance(premarket, dict) else []
     if isinstance(feeds, list):
         for feed in feeds:
@@ -84,6 +106,17 @@ def build_providers(app_config: dict[str, object]) -> list[object]:
                 )
             )
     return providers
+
+
+def resolve_limit_per_source(app_config: dict[str, object], cli_limit: int | None = None) -> int:
+    if cli_limit is not None:
+        return cli_limit
+    premarket = app_config.get("premarket", {})
+    if isinstance(premarket, dict):
+        configured = premarket.get("limit_per_source")
+        if isinstance(configured, int) and configured > 0:
+            return configured
+    return 30
 
 
 def load_calendar_config(app_config: dict[str, object]) -> dict[str, object]:

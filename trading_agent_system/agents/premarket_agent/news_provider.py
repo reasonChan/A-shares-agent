@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
+from typing import Literal
 from urllib.parse import urljoin, urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
@@ -13,6 +15,34 @@ from zoneinfo import ZoneInfo
 from trading_agent_system.schemas import PremarketNewsItem, PremarketSourceStatus
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass(frozen=True)
+class FetchWindow:
+    mode: Literal["premarket", "post_close"]
+    trading_day: date
+    previous_trading_day: date
+    timezone: str
+    window_start: datetime
+    window_end: datetime
+
+    def contains(self, published_at: datetime | None) -> bool:
+        if published_at is None:
+            return False
+        published = published_at.astimezone(ZoneInfo(self.timezone))
+        return self.window_start <= published < self.window_end
+
+    def filter_items(self, items: list[PremarketNewsItem]) -> list[PremarketNewsItem]:
+        return [item for item in items if self.contains(item.published_at)]
+
+
+def _filter_items_for_window(
+    items: list[PremarketNewsItem],
+    window: FetchWindow | None,
+) -> list[PremarketNewsItem]:
+    if window is None:
+        return items
+    return window.filter_items(items)
 
 
 class NewsProviderResult:
@@ -31,6 +61,7 @@ class NewsProviderResult:
     def source_status(self, used_count: int) -> PremarketSourceStatus:
         return PremarketSourceStatus(
             source=self.source,
+            provider_name=self.source,
             status=self.status,
             fetched_count=len(self.items),
             used_count=used_count,
@@ -46,7 +77,7 @@ class CailianpressTelegraphProvider:
     def __init__(self, timeout_seconds: int = 8) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
         params = {
             "app": "CailianpressWeb",
             "category": "",
@@ -63,7 +94,8 @@ class CailianpressTelegraphProvider:
             if isinstance(data.get("data"), dict):
                 rows = data["data"].get("roll_data") or data["data"].get("list") or []
             items = [self._row_to_item(row) for row in rows[:limit] if isinstance(row, dict)]
-            return NewsProviderResult(self.source, [item for item in items if item.title], "ok" if items else "empty")
+            items = _filter_items_for_window([item for item in items if item.title], window)
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
         except Exception as error:
             return NewsProviderResult(self.source, [], "failed", str(error))
 
@@ -120,7 +152,7 @@ class RssNewsProvider:
         self.tier = tier
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
         try:
             request = Request(self.url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/rss+xml,text/xml,*/*"})
             with urlopen(request, timeout=self.timeout_seconds) as response:
@@ -128,6 +160,7 @@ class RssNewsProvider:
             root = ElementTree.fromstring(payload)
             rows = root.findall(".//item")[:limit]
             items = [self._item_to_news(row) for row in rows]
+            items = _filter_items_for_window(items, window)
             return NewsProviderResult(self.source, items, "ok" if items else "empty")
         except Exception as error:
             return NewsProviderResult(self.source, [], "failed", str(error))
@@ -169,7 +202,7 @@ class EastMoneyNewsProvider:
         self.column = column
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
         params = {
             "client": "web",
             "biz": "web_news_col",
@@ -188,7 +221,8 @@ class EastMoneyNewsProvider:
             data = json.loads(payload)
             rows = data.get("data", {}).get("list", []) if isinstance(data.get("data"), dict) else []
             items = [self._row_to_item(row) for row in rows[:limit] if isinstance(row, dict)]
-            return NewsProviderResult(self.source, [item for item in items if item.title], "ok" if items else "empty")
+            items = _filter_items_for_window([item for item in items if item.title], window)
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
         except Exception as error:
             return NewsProviderResult(self.source, [], "failed", str(error))
 
@@ -215,34 +249,66 @@ class SinaFinanceRollProvider:
     tier = "professional"
     url = "https://feed.mix.sina.com.cn/api/roll/get"
 
-    def __init__(self, lid: str = "2515", timeout_seconds: int = 8) -> None:
+    def __init__(
+        self,
+        source: str = "新浪财经滚动",
+        lid: str = "2516",
+        category: str = "sina_finance",
+        timeout_seconds: int = 8,
+        max_pages: int = 20,
+        page_size: int = 50,
+    ) -> None:
+        self.source = source
         self.lid = lid
+        self.category = category
         self.timeout_seconds = timeout_seconds
+        self.max_pages = max_pages
+        self.page_size = page_size
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
+        items: list[PremarketNewsItem] = []
+        try:
+            for page in range(1, self.max_pages + 1):
+                rows = self._fetch_page(limit=limit, page=page)
+                if not rows:
+                    break
+                page_items = [self._row_to_item(row) for row in rows if isinstance(row, dict)]
+                items.extend(item for item in page_items if item.title)
+                if self._page_is_older_than_window(page_items, window):
+                    break
+                if window is None and len(items) >= limit:
+                    break
+            items = _filter_items_for_window(items, window)[:limit]
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
+        except Exception as error:
+            return NewsProviderResult(self.source, [], "failed", str(error))
+
+    def _fetch_page(self, limit: int, page: int) -> list[dict[str, object]]:
         params = {
             "pageid": "153",
             "lid": self.lid,
-            "num": limit,
-            "page": "1",
+            "num": min(max(limit, self.page_size), 100),
+            "page": str(page),
         }
-        try:
-            request = Request(
-                f"{self.url}?{urlencode(params)}",
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"},
-            )
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = response.read().decode("utf-8", errors="ignore")
-            data = json.loads(payload)
-            result = data.get("result", {}) if isinstance(data, dict) else {}
-            status = result.get("status", {})
-            if status.get("code") not in (0, "0"):
-                return NewsProviderResult(self.source, [], "failed", str(status.get("msg") or status))
-            rows = result.get("data") or []
-            items = [self._row_to_item(row) for row in rows[:limit] if isinstance(row, dict)]
-            return NewsProviderResult(self.source, [item for item in items if item.title], "ok" if items else "empty")
-        except Exception as error:
-            return NewsProviderResult(self.source, [], "failed", str(error))
+        request = Request(
+            f"{self.url}?{urlencode(params)}",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"},
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            payload = response.read().decode("utf-8", errors="ignore")
+        data = json.loads(payload)
+        result = data.get("result", {}) if isinstance(data, dict) else {}
+        status = result.get("status", {})
+        if status.get("code") not in (0, "0"):
+            raise RuntimeError(str(status.get("msg") or status))
+        rows = result.get("data") or []
+        return rows if isinstance(rows, list) else []
+
+    def _page_is_older_than_window(self, items: list[PremarketNewsItem], window: FetchWindow | None) -> bool:
+        if window is None:
+            return False
+        timestamps = [item.published_at.astimezone(ZoneInfo(window.timezone)) for item in items if item.published_at]
+        return bool(timestamps) and max(timestamps) < window.window_start
 
     def _row_to_item(self, row: dict[str, object]) -> PremarketNewsItem:
         title = str(row.get("title") or row.get("stitle") or "")
@@ -254,7 +320,7 @@ class SinaFinanceRollProvider:
             summary=intro,
             url=str(row.get("url") or row.get("wapurl") or ""),
             published_at=self._timestamp(row.get("ctime") or row.get("intime")),
-            category="sina_roll",
+            category=self.category,
             credibility=0.72,
         )
 
@@ -273,26 +339,27 @@ class CsrcNewsProvider:
     def __init__(self, timeout_seconds: int = 8) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
         try:
-            items = self._fetch_json(limit)
+            items = self._fetch_json(limit, window)
             if items:
                 return NewsProviderResult(self.source, items, "ok")
             request = Request(self.url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"})
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 payload = response.read().decode("utf-8", errors="ignore")
             items = self._parse_items(payload, limit)
+            items = _filter_items_for_window(items, window)
             return NewsProviderResult(self.source, items, "ok" if items else "empty")
         except Exception as error:
             return NewsProviderResult(self.source, [], "failed", str(error))
 
-    def _fetch_json(self, limit: int) -> list[PremarketNewsItem]:
+    def _fetch_json(self, limit: int, window: FetchWindow | None = None) -> list[PremarketNewsItem]:
         params = {
             "_isAgg": "true",
             "_isJson": "true",
             "_pageSize": limit,
             "_template": "index",
-            "_rangeTimeGte": "",
+            "_rangeTimeGte": window.window_start.strftime("%Y-%m-%d") if window else "",
             "_channelName": "",
             "page": 1,
         }
@@ -304,7 +371,7 @@ class CsrcNewsProvider:
             payload = response.read().decode("utf-8", errors="ignore")
         data = json.loads(payload)
         rows = data.get("data", {}).get("results", []) if isinstance(data.get("data"), dict) else []
-        return [self._row_to_item(row) for row in rows[:limit] if isinstance(row, dict)]
+        return _filter_items_for_window([self._row_to_item(row) for row in rows[:limit] if isinstance(row, dict)], window)
 
     def _row_to_item(self, row: dict[str, object]) -> PremarketNewsItem:
         title = re.sub(r"\s+", " ", str(row.get("title") or "")).strip()
@@ -357,7 +424,7 @@ class CsrcNewsProvider:
                     title=title,
                     summary=title,
                     url=urljoin(self.url, href),
-                    published_at=None,
+                    published_at=self._timestamp(raw_date),
                     category="official_policy",
                     credibility=0.94,
                 )
@@ -365,10 +432,290 @@ class CsrcNewsProvider:
         return items
 
 
+def _clean_text(value: object, max_length: int | None = None) -> str:
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", unescape(str(value or "")))).strip()
+    if max_length and len(text) > max_length:
+        return f"{text[:max_length].rstrip()}..."
+    return text
+
+
+def _timestamp_from_epoch(value: object) -> datetime | None:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if number > 10_000_000_000:
+        number //= 1000
+    return datetime.fromtimestamp(number, tz=timezone.utc)
+
+
+class KaipanlaNewsProvider:
+    source = "开盘啦最新资讯"
+    tier = "sentiment"
+    url = "https://www.kaipanla.com/latest-news/1"
+
+    def __init__(self, timeout_seconds: int = 8) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
+        try:
+            payload = self._get(self.url)
+            rows = self._extract_rows(payload)
+            items = [self._row_to_item(row) for row in rows[:limit]]
+            items = [item for item in items if item.title]
+            items = _filter_items_for_window(items, window)
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
+        except Exception as error:
+            return NewsProviderResult(self.source, [], "failed", str(error))
+
+    def _get(self, url: str) -> str:
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"})
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            return response.read().decode("utf-8", errors="ignore")
+
+    def _extract_rows(self, payload: str) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        seen: set[str] = set()
+
+        def add(row: dict[str, object]) -> None:
+            title = _clean_text(row.get("Title") or row.get("title"))
+            if not title:
+                return
+            key = str(row.get("ID") or row.get("id") or title)
+            if key in seen:
+                return
+            seen.add(key)
+            rows.append(row)
+
+        def walk(value: object) -> None:
+            if isinstance(value, dict):
+                for key in ("Latest", "Flash", "List", "list", "items"):
+                    nested = value.get(key)
+                    if isinstance(nested, list):
+                        for row in nested:
+                            if isinstance(row, dict) and (row.get("Title") or row.get("title")):
+                                add(row)
+                for nested in value.values():
+                    walk(nested)
+                return
+            if isinstance(value, list):
+                for nested in value:
+                    walk(nested)
+                return
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith("{") or stripped.startswith("["):
+                    try:
+                        walk(json.loads(stripped))
+                    except json.JSONDecodeError:
+                        return
+
+        for match in re.findall(r'<script[^>]+data-nuxt-data="[^"]+"[^>]*>(.*?)</script>', payload, flags=re.S):
+            try:
+                walk(json.loads(unescape(match)))
+            except json.JSONDecodeError:
+                continue
+        if not rows:
+            html_rows = re.findall(r'href="/article/(?P<id>\d+)"[^>]*class="item-link"[^>]*>(?P<title>[^<]+)</a>', payload)
+            for article_id, title in html_rows:
+                add({"ID": article_id, "Title": title})
+        return rows
+
+    def _row_to_item(self, row: dict[str, object]) -> PremarketNewsItem:
+        article_id = str(row.get("ID") or row.get("id") or "")
+        title = _clean_text(row.get("Title") or row.get("title"))
+        summary = _clean_text(row.get("ZhaiYao") or row.get("summary") or title)
+        return PremarketNewsItem(
+            source=self.source,
+            source_tier=self.tier,
+            title=title,
+            summary=summary,
+            url=f"https://www.kaipanla.com/article/{article_id}" if article_id else self.url,
+            published_at=_timestamp_from_epoch(row.get("CreateTime") or row.get("create_time")),
+            category="platform_news",
+            credibility=0.46,
+            risk_flags=["third_party_platform", "sentiment_only"],
+        )
+
+
+class XueqiuHotProvider:
+    source = "雪球热议"
+    tier = "sentiment"
+    url = "https://xueqiu.com/statuses/hot/listV2.json"
+
+    def __init__(self, timeout_seconds: int = 8) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
+        try:
+            payload = self._get_json(f"{self.url}?{urlencode({'since_id': -1, 'max_id': -1, 'size': limit})}")
+            if isinstance(payload, dict) and payload.get("error_code"):
+                return NewsProviderResult(
+                    self.source,
+                    [],
+                    "failed",
+                    f"{payload.get('error_code')}: {payload.get('error_description') or payload.get('error_uri')}",
+                )
+            rows = self._extract_rows(payload)
+            items = [self._row_to_item(row) for row in rows[:limit]]
+            items = [item for item in items if item.title]
+            items = _filter_items_for_window(items, window)
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
+        except Exception as error:
+            return NewsProviderResult(self.source, [], "failed", str(error))
+
+    def _get_json(self, url: str) -> object:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://xueqiu.com/",
+        }
+        request = Request(url, headers=headers)
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            payload = response.read().decode("utf-8", errors="ignore")
+        return json.loads(payload)
+
+    def _extract_rows(self, payload: object) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+
+        def walk(value: object) -> None:
+            if isinstance(value, dict):
+                row = value.get("status") or value.get("original_status")
+                if isinstance(row, dict) and (row.get("text") or row.get("description") or row.get("title")):
+                    rows.append(row)
+                elif value.get("text") or value.get("description") or value.get("title"):
+                    rows.append(value)
+                for key in ("items", "list", "statuses", "data"):
+                    nested = value.get(key)
+                    if isinstance(nested, (list, dict)):
+                        walk(nested)
+                return
+            if isinstance(value, list):
+                for nested in value:
+                    walk(nested)
+
+        walk(payload)
+        return rows
+
+    def _row_to_item(self, row: dict[str, object]) -> PremarketNewsItem:
+        text = _clean_text(row.get("text") or row.get("description") or row.get("title"), max_length=280)
+        user = row.get("user") if isinstance(row.get("user"), dict) else {}
+        user_name = str(user.get("screen_name") or user.get("name") or "雪球用户") if isinstance(user, dict) else "雪球用户"
+        row_id = row.get("id") or row.get("status_id")
+        user_id = user.get("id") if isinstance(user, dict) else None
+        url = str(row.get("target") or row.get("url") or "")
+        if not url and user_id and row_id:
+            url = f"https://xueqiu.com/{user_id}/{row_id}"
+        return PremarketNewsItem(
+            source=self.source,
+            source_tier=self.tier,
+            title=text[:80],
+            summary=f"{user_name}: {text}",
+            url=url or "https://xueqiu.com",
+            published_at=_timestamp_from_epoch(row.get("created_at") or row.get("time")),
+            category="social_discussion",
+            credibility=0.36,
+            risk_flags=["third_party_platform", "sentiment_only"],
+        )
+
+
+class TonghuashunNewsProvider:
+    source = "同花顺7x24"
+    tier = "professional"
+    url = "https://news.10jqka.com.cn/tapp/news/push/stock/"
+
+    def __init__(self, timeout_seconds: int = 8, max_pages: int = 20, page_size: int = 50) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.max_pages = max_pages
+        self.page_size = page_size
+
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
+        items: list[PremarketNewsItem] = []
+        try:
+            for page in range(1, self.max_pages + 1):
+                rows = self._fetch_page(page=page, limit=limit)
+                if not rows:
+                    break
+                page_items = [self._row_to_item(row) for row in rows if isinstance(row, dict)]
+                items.extend(item for item in page_items if item.title)
+                if self._page_is_older_than_window(page_items, window):
+                    break
+                if window is None and len(items) >= limit:
+                    break
+            items = _filter_items_for_window(items, window)[:limit]
+            return NewsProviderResult(self.source, items, "ok" if items else "empty")
+        except Exception as error:
+            return NewsProviderResult(self.source, [], "failed", str(error))
+
+    def _fetch_page(self, page: int, limit: int) -> list[dict[str, object]]:
+        params = {
+            "page": page,
+            "tag": "",
+            "track": "website",
+            "pagesize": min(max(limit, self.page_size), 100),
+        }
+        request = Request(
+            f"{self.url}?{urlencode(params)}",
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": "https://news.10jqka.com.cn/realtimenews.html",
+            },
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            payload = response.read().decode("utf-8", errors="ignore")
+        data = json.loads(payload)
+        if str(data.get("code")) != "200":
+            raise RuntimeError(str(data.get("msg") or data))
+        rows = data.get("data", {}).get("list", []) if isinstance(data.get("data"), dict) else []
+        return rows if isinstance(rows, list) else []
+
+    def _page_is_older_than_window(self, items: list[PremarketNewsItem], window: FetchWindow | None) -> bool:
+        if window is None:
+            return False
+        timestamps = [item.published_at.astimezone(ZoneInfo(window.timezone)) for item in items if item.published_at]
+        return bool(timestamps) and max(timestamps) < window.window_start
+
+    def _row_to_item(self, row: dict[str, object]) -> PremarketNewsItem:
+        return PremarketNewsItem(
+            source=self.source,
+            source_tier=self.tier,
+            title=_clean_text(row.get("title")),
+            summary=_clean_text(row.get("digest") or row.get("short") or row.get("title"), max_length=320),
+            url=str(row.get("url") or row.get("shareUrl") or row.get("appUrl") or self.url),
+            published_at=_timestamp_from_epoch(row.get("ctime") or row.get("rtime")),
+            category="ths_7x24",
+            symbols=self._symbols(row.get("stock")),
+            sectors=self._tag_names(row.get("tags")),
+            credibility=0.7,
+            risk_flags=["third_party_platform"],
+        )
+
+    def _tag_names(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        names = []
+        for item in value:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(str(item["name"]))
+        return names
+
+    def _symbols(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        symbols = []
+        for item in value:
+            if isinstance(item, dict) and item.get("code"):
+                symbols.append(str(item["code"]))
+        return symbols
+
+
 class DemoPremarketNewsProvider:
     source = "demo"
 
-    def fetch(self, limit: int = 30) -> NewsProviderResult:
+    def fetch(self, limit: int = 30, window: FetchWindow | None = None) -> NewsProviderResult:
         now = datetime.now(timezone.utc)
         items = [
             PremarketNewsItem(
@@ -404,4 +751,5 @@ class DemoPremarketNewsProvider:
                 risk_flags=["sentiment_only"],
             ),
         ]
-        return NewsProviderResult(self.source, items[:limit], "ok")
+        items = _filter_items_for_window(items[:limit], window)
+        return NewsProviderResult(self.source, items, "ok" if items else "empty")

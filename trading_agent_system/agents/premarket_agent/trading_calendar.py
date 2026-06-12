@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo
 
 from .schemas import PreMarketWindow
+
+if TYPE_CHECKING:
+    from .news_provider import FetchWindow
 
 
 DEFAULT_SESSION = {
@@ -84,6 +88,31 @@ class TradingCalendarService:
 
     def build_premarket_window(self, trading_day: date) -> PreMarketWindow:
         return self.build_window(trading_day)
+
+    def build_fetch_window(self, trading_day: date, mode: Literal["premarket", "post_close"] = "premarket") -> FetchWindow:
+        from .news_provider import FetchWindow
+
+        if mode == "premarket":
+            window = self.build_window(trading_day)
+            return FetchWindow(
+                mode=mode,
+                trading_day=window.trading_day,
+                previous_trading_day=window.previous_trading_day,
+                timezone=window.timezone,
+                window_start=window.window_start,
+                window_end=window.continuous_open,
+            )
+
+        next_day = self.next_trading_day(trading_day)
+        next_window = self.build_window(next_day)
+        return FetchWindow(
+            mode=mode,
+            trading_day=next_day,
+            previous_trading_day=trading_day,
+            timezone=self.timezone_name,
+            window_start=self._combine(trading_day, self.session["previous_close_time"]),
+            window_end=next_window.continuous_open,
+        )
 
     def _combine(self, value: date, clock: str) -> datetime:
         parsed = time.fromisoformat(clock)

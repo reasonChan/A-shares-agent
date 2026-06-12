@@ -1673,6 +1673,320 @@ kbd {
   background: #FFF1F0;
 }
 
+.premarket-debug-page {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.premarket-debug-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.premarket-debug-toolbar .section-title {
+  margin-bottom: 0;
+}
+
+.premarket-debug-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-query {
+  width: 280px;
+}
+
+.premarket-debug-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 360px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.debug-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+  color: #111111;
+  text-align: left;
+}
+
+.debug-step.active {
+  border-color: #FFDD00;
+  background: #FFFAD8;
+}
+
+.debug-step span,
+.debug-step small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-step span {
+  font-weight: 700;
+}
+
+.debug-step strong {
+  grid-row: span 2;
+  align-self: center;
+  color: #111111;
+  font-size: 20px;
+}
+
+.debug-step small {
+  color: #888888;
+  font-size: 12px;
+}
+
+.debug-detail,
+.debug-side-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.debug-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.debug-card-head h2,
+.debug-side-card h2 {
+  margin: 0;
+  color: #111111;
+  font-size: 15px;
+}
+
+.debug-card-head span {
+  overflow: hidden;
+  color: #888888;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.debug-step-window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid #EFEFEF;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #777777;
+  font-size: 12px;
+}
+
+.debug-step-window strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #333333;
+  font-weight: 600;
+}
+
+.debug-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.debug-record-list > li {
+  display: grid;
+  gap: 4px;
+  min-height: 56px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.debug-record-list > li > strong,
+.debug-record-list > li > span,
+.debug-record-list > li > code,
+.debug-source-main strong,
+.debug-source-main span,
+.debug-source-main code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-record-list > li > strong,
+.debug-source-main strong {
+  color: #111111;
+}
+
+.debug-record-list > li > span,
+.debug-record-list > li > code,
+.debug-source-main span,
+.debug-source-main code {
+  color: #888888;
+  font-size: 12px;
+}
+
+.debug-record-list code {
+  font-family: inherit;
+}
+
+.debug-record-list > li.debug-source-record {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.debug-source-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.debug-source-toggle:hover {
+  background: #FAFAFA;
+}
+
+.debug-source-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.debug-source-count {
+  color: #555555;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.debug-source-chevron {
+  color: #888888;
+  transition: transform 0.16s ease;
+}
+
+.debug-source-record.expanded .debug-source-chevron {
+  transform: rotate(180deg);
+}
+
+.debug-source-detail {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #F0F0F0;
+  background: #FAFAFA;
+}
+
+.debug-source-empty {
+  margin: 0;
+  color: #888888;
+  font-size: 12px;
+}
+
+.debug-source-items {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.debug-source-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #F0F0F0;
+  border-radius: 6px;
+  background: #FFFFFF;
+}
+
+.debug-source-item-title,
+.debug-source-item-summary,
+.debug-source-item-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.debug-source-item-title {
+  min-height: 20px;
+  color: #111111;
+  font-size: 13px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-source-item-summary {
+  display: -webkit-box;
+  max-height: 36px;
+  color: #555555;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: initial;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.debug-source-item-meta {
+  min-height: 18px;
+  color: #888888;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-side {
+  display: grid;
+  gap: 12px;
+}
+
+.debug-side-card p {
+  margin: 8px 0 0;
+  color: #555555;
+}
+
 @media (max-width: 1180px) {
   .pipeline-flow {
     grid-template-columns: 1fr;
@@ -1683,8 +1997,19 @@ kbd {
   }
 
   .pipeline-detail-grid,
-  .module-status-grid {
+  .module-status-grid,
+  .premarket-debug-grid {
     grid-template-columns: 1fr;
+  }
+
+  .premarket-debug-toolbar,
+  .premarket-debug-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .debug-query {
+    width: 100%;
   }
 }
 
